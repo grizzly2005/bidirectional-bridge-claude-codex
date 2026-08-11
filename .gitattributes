@@ -1,0 +1,2 @@
+# The certification manifest hashes raw bytes; keep versioned text stable across platforms.
+* text=auto eol=lf

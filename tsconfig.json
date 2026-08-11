@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "shared/protocol" },
+    { "path": "shared/control-plane" },
+    { "path": "shared/mcp-server-core" },
+    { "path": "claude/claude-side" },
+    { "path": "codex" }
+  ],
+  "//": "codex/tsconfig.json is codex-owned and referenced (not edited) so a single root build covers the whole bridge; without it `npm run build` left codex/dist absent and the default bridge-codex-mcp launcher could not start."
+}

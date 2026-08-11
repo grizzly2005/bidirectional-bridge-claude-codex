@@ -1,0 +1,331 @@
+{
+  "task_id": "BRIDGE-BENCHMARK-TELEMETRY-001",
+  "captured_at": "2026-08-09T16:34:13.254Z",
+  "branch": "bench/bridge-pilot-v1",
+  "baseline_commit": "5959e8df3d8707cc1ee5a588c407c7255b3c74a5",
+  "redaction": {
+    "raw_prompts_retained": false,
+    "conversation_history_retained": false,
+    "raw_runtime_frames_retained": false,
+    "authentication_material_retained": false,
+    "raw_execution_handles_retained": false,
+    "temporary_database_paths_retained": false,
+    "runtime_stderr_retained": false
+  },
+  "source_stability": {
+    "algorithm": "sha256 over bytewise-sorted Git project material, excluding this generated proof file",
+    "included_file_count": 112,
+    "before_live_sha256": "355ac4b0a6f06839e27019a45b5354f463b5ca44d62c664a873874b7581587c1",
+    "after_live_sha256": "355ac4b0a6f06839e27019a45b5354f463b5ca44d62c664a873874b7581587c1",
+    "unexpected_changes": false
+  },
+  "claude_adapter_probe": {
+    "command": "npm --workspace @bridge/claude-side run live:telemetry",
+    "exit_code": 0,
+    "assertions": {
+      "passed": 20,
+      "total": 20
+    },
+    "sample": {
+      "runtime": "claude-code",
+      "runtime_version": "2.1.226",
+      "model": "claude-opus-5",
+      "runtime_duration_ms": 2628,
+      "input_tokens": 21160,
+      "output_tokens": 17,
+      "cached_input_tokens": 16180,
+      "cache_creation_input_tokens": 4978,
+      "total_tokens": 21177,
+      "turn_count": 1,
+      "reported_cost_usd": 0.0593,
+      "cost_semantics": "runtime_reported",
+      "billing_mode_known": false,
+      "prompt_bytes": 1528,
+      "termination_kind": "completed",
+      "process_exit_code": 0
+    }
+  },
+  "claude_alone": {
+    "live_command_class": "real project MCP control plane with Claude caller and real Claude adapter",
+    "exit_code": 0,
+    "deliverable_status": "COMPLETE",
+    "changed_scope": [],
+    "artifact_count": 0,
+    "verification": {
+      "command": "node --version",
+      "passed": true,
+      "exit_code": 0
+    },
+    "execution_handle": {
+      "persisted": true,
+      "length": 36,
+      "value": "omitted"
+    },
+    "telemetry_event_count": 1,
+    "record": {
+      "run_id": "run_761x96w7sd",
+      "task_id": "task_c5wqtshcs3",
+      "attempt": 0,
+      "agent": "claude",
+      "runtime": "claude-code",
+      "runtime_version": "2.1.226",
+      "model": "claude-opus-5",
+      "parent_task_id": null,
+      "delegation_depth": 0,
+      "orchestration_started_at": 1786293157040,
+      "runtime_started_at": 1786293157044,
+      "first_output_at": 1786293161543,
+      "runtime_ended_at": 1786293170346,
+      "completed_at": 1786293170348,
+      "wall_duration_ms": 13308,
+      "runtime_duration_ms": 11556,
+      "input_tokens": 40334,
+      "output_tokens": 458,
+      "cached_input_tokens": 36303,
+      "cache_creation_input_tokens": 4027,
+      "total_tokens": 40792,
+      "turn_count": 2,
+      "cumulative_session_tokens": null,
+      "reported_cost_usd": 0.0708995,
+      "cost_semantics": "runtime_reported",
+      "billing_mode_known": false,
+      "prompt_bytes": 1753,
+      "input_artifact_count": 0,
+      "input_artifact_bytes": 0,
+      "termination_kind": "completed",
+      "process_exit_code": 0
+    }
+  },
+  "codex_alone": {
+    "live_command_class": "real project MCP control plane with Codex caller and real Codex App Server adapter",
+    "exit_code": 0,
+    "deliverable_status": "COMPLETE",
+    "changed_scope": [],
+    "artifact_count": 1,
+    "verification": {
+      "command": "node --version",
+      "passed": true,
+      "exit_code": 0
+    },
+    "execution_handle": {
+      "persisted": true,
+      "length": 36,
+      "value": "omitted"
+    },
+    "telemetry_event_count": 1,
+    "record": {
+      "run_id": "run_7e3y57e46m",
+      "task_id": "task_kvpb6rhxzp",
+      "attempt": 0,
+      "agent": "codex",
+      "runtime": "codex-app-server",
+      "runtime_version": "0.147.0",
+      "model": "gpt-5.6-sol",
+      "parent_task_id": null,
+      "delegation_depth": 0,
+      "orchestration_started_at": 1786293200747,
+      "runtime_started_at": 1786293200000,
+      "first_output_at": 1786293211700,
+      "runtime_ended_at": 1786293215000,
+      "completed_at": 1786293215800,
+      "wall_duration_ms": 15053,
+      "runtime_duration_ms": 14853,
+      "input_tokens": 44853,
+      "output_tokens": 463,
+      "cached_input_tokens": 13824,
+      "cache_creation_input_tokens": 0,
+      "total_tokens": 45316,
+      "turn_count": 1,
+      "cumulative_session_tokens": 45316,
+      "reported_cost_usd": null,
+      "cost_semantics": "unavailable",
+      "billing_mode_known": false,
+      "prompt_bytes": 2379,
+      "input_artifact_count": 0,
+      "input_artifact_bytes": 0,
+      "termination_kind": "completed",
+      "process_exit_code": null
+    }
+  },
+  "cross_agent": {
+    "live_command_class": "real Codex App Server manager attempt followed by its real Claude child through the neutral MCP control plane",
+    "exit_code": 0,
+    "run_id": "run_6wefkd2taq",
+    "manager": "codex",
+    "worker": "claude",
+    "parent_task_id": "task_9tp0ya4z15",
+    "parent_deliverable_status": "COMPLETE",
+    "parent_delegation_depth": 0,
+    "parent_changed_scope": [],
+    "child_task_id": "task_4m45g6h2rh",
+    "child_deliverable_status": "COMPLETE",
+    "child_delegation_depth": 1,
+    "child_changed_scope": [],
+    "parent_verification": {
+      "command": "bounded child-contract validation",
+      "passed": true,
+      "exit_code": 0
+    },
+    "child_verification": {
+      "command": "node --version",
+      "passed": true,
+      "exit_code": 0
+    },
+    "parent_execution_handle": {
+      "persisted": true,
+      "length": 36,
+      "value": "omitted"
+    },
+    "child_execution_handle": {
+      "persisted": true,
+      "length": 36,
+      "value": "omitted"
+    },
+    "telemetry_event_count": 2,
+    "total_codex_tokens": 69632,
+    "total_claude_tokens": 40393,
+    "combined_tokens": 110025,
+    "codex_record": {
+      "run_id": "run_6wefkd2taq",
+      "task_id": "task_9tp0ya4z15",
+      "attempt": 0,
+      "agent": "codex",
+      "runtime": "codex-app-server",
+      "runtime_version": "0.147.0",
+      "model": "gpt-5.6-sol",
+      "parent_task_id": null,
+      "delegation_depth": 0,
+      "orchestration_started_at": 1786293910947,
+      "runtime_started_at": 1786293911000,
+      "first_output_at": 1786293919750,
+      "runtime_ended_at": 1786293942000,
+      "completed_at": 1786293942199,
+      "wall_duration_ms": 31252,
+      "runtime_duration_ms": 31050,
+      "input_tokens": 68458,
+      "output_tokens": 1174,
+      "cached_input_tokens": 51456,
+      "cache_creation_input_tokens": 0,
+      "total_tokens": 69632,
+      "turn_count": 1,
+      "cumulative_session_tokens": 69632,
+      "reported_cost_usd": null,
+      "cost_semantics": "unavailable",
+      "billing_mode_known": false,
+      "prompt_bytes": 2645,
+      "input_artifact_count": 0,
+      "input_artifact_bytes": 0,
+      "termination_kind": "completed",
+      "process_exit_code": null
+    },
+    "claude_record": {
+      "run_id": "run_6wefkd2taq",
+      "task_id": "task_4m45g6h2rh",
+      "attempt": 0,
+      "agent": "claude",
+      "runtime": "claude-code",
+      "runtime_version": "2.1.226",
+      "model": "claude-opus-5",
+      "parent_task_id": "task_9tp0ya4z15",
+      "delegation_depth": 1,
+      "orchestration_started_at": 1786293944538,
+      "runtime_started_at": 1786293944542,
+      "first_output_at": 1786293947166,
+      "runtime_ended_at": 1786293955195,
+      "completed_at": 1786293955197,
+      "wall_duration_ms": 10659,
+      "runtime_duration_ms": 9446,
+      "input_tokens": 39941,
+      "output_tokens": 452,
+      "cached_input_tokens": 35818,
+      "cache_creation_input_tokens": 4119,
+      "total_tokens": 40393,
+      "turn_count": 2,
+      "cumulative_session_tokens": null,
+      "reported_cost_usd": 0.07142599999999999,
+      "cost_semantics": "runtime_reported",
+      "billing_mode_known": false,
+      "prompt_bytes": 1748,
+      "input_artifact_count": 0,
+      "input_artifact_bytes": 0,
+      "termination_kind": "completed",
+      "process_exit_code": 0
+    }
+  },
+  "codex_resume": {
+    "live_command_class": "real Codex App Server start, close, fresh-process thread resume",
+    "exit_code": 0,
+    "same_handle": true,
+    "semantic_continuation": true,
+    "execution_handle": {
+      "persisted": true,
+      "length": 36,
+      "value": "omitted"
+    },
+    "first_turn": {
+      "input_tokens": 17947,
+      "output_tokens": 5,
+      "cached_input_tokens": 6912,
+      "total_tokens": 17952,
+      "cumulative_session_tokens": 17952
+    },
+    "resumed_turn": {
+      "input_tokens": 18134,
+      "output_tokens": 9,
+      "cached_input_tokens": 17152,
+      "total_tokens": 18143,
+      "cumulative_session_tokens": 36095
+    }
+  },
+  "quality_gates": {
+    "claude_targeted_tests": {
+      "exit_code": 0,
+      "passed": 89,
+      "total": 89
+    },
+    "preliminary_typecheck": {
+      "exit_code": 0
+    },
+    "final_typecheck": {
+      "command": "npm run typecheck",
+      "exit_code": 0
+    },
+    "final_tests": {
+      "command": "npm test",
+      "exit_code": 0,
+      "test_files_passed": 17,
+      "tests_passed": 248,
+      "tests_total": 248
+    },
+    "final_build": {
+      "command": "npm run build",
+      "exit_code": 0
+    },
+    "official_codex_mcp_smoke": {
+      "command": "npm --workspace @bridge/codex-side run smoke:invoke",
+      "exit_code": 0,
+      "probe_state": "READY",
+      "deliverable_status": "COMPLETE"
+    },
+    "certified_claude_smoke": {
+      "command": "npm run live:claude",
+      "exit_code": 0,
+      "initial_deliverable_status": "COMPLETE",
+      "same_session_resume": true,
+      "semantic_continuation": true
+    },
+    "source_manifest_stability_across_final_smokes": {
+      "included_file_count": 113,
+      "before_sha256": "6391cf188816df142ca360ef4a1faf05358daac5b84b780c663bca5b8e070ca8",
+      "after_sha256": "6391cf188816df142ca360ef4a1faf05358daac5b84b780c663bca5b8e070ca8"
+    },
+    "final_cleanup": {
+      "lifecycle_tests_in_full_suite": "passed",
+      "unexpected_bridge_child_processes": 0,
+      "sqlite_files_exclusive_open_passed": 16,
+      "sqlite_files_exclusive_open_total": 16,
+      "temporary_entry_deletion": "blocked_by_execution_policy",
+      "remaining_task_temporary_entries": 17
+    }
+  }
+}

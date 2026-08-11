@@ -1,0 +1,49 @@
+{
+  "task_id": "BRIDGE-NATIVE-MCP-001",
+  "owner": "codex",
+  "objective": "Expose the existing neutral bridge as one project-scoped native MCP composition root for Codex and Claude Code, with startup-bound caller identity, server-side delegation policy, lineage loop protection, preserved telemetry, and real native-client proofs.",
+  "scope": {
+    "paths": [
+      ".codex/config.toml",
+      ".mcp.json (Claude project configuration; delegated Claude creation was attempted and the user-authorized Claude CLI completed it at the sensitive-file boundary)",
+      "scripts/native-bridge-mcp.mjs",
+      "shared/control-plane/src/{task-service,orchestrator,index,delegation-safety.test}.ts",
+      "shared/mcp-server-core/src/{server,tools,index,tools.test,stdout-purity.test,native-launcher.test}.ts",
+      "codex/codex-side/coordination/task_bridge_native_mcp_001.json",
+      "BENCHMARK/native-mcp/**",
+      "certification/manifest-v1.json"
+    ],
+    "note": "Claude-specific project configuration is delegated to the real Claude runtime. Existing telemetry and adapter implementation files are reused without redesign."
+  },
+  "dependencies": [
+    "BRIDGE-BENCHMARK-TELEMETRY-001"
+  ],
+  "expected_deliverable": "One neutral launcher used by project-scoped Codex and Claude configurations, deterministic identity/policy/lineage protections, real no-mock cross-runtime native proofs, and reproducible verification artifacts.",
+  "verification_criteria": [
+    "Codex and Claude discover the same project-scoped bridge launcher without global MCP definitions",
+    "Omitted callers resolve to the startup-bound identity and contradictory callers are rejected",
+    "Delegation deny is enforced server-side and delegation allow reaches the real opposite runtime",
+    "A Claude to Codex to Claude ancestor loop is deterministically rejected while the depth limit remains enforced",
+    "Root and child lineage preserve run_id with depths zero and one",
+    "Native delegation uses the existing per-attempt telemetry path and exported telemetry remains redacted",
+    "Separate stdio processes share the intended SQLite control-plane state and shut down cleanly",
+    "npm ci, npm ls, typecheck, full tests, build, manifest, dependency scan, and both native client proofs pass"
+  ],
+  "status": "DONE",
+  "progress": 1,
+  "artifacts": [
+    "BENCHMARK/native-mcp/native-mcp-proof.json",
+    "BENCHMARK/native-mcp/usage.md"
+  ],
+  "evidence": {
+    "codex_native": "codex-cli 0.147.0 loaded the project bridge, caller=codex, created run_d8pn9zy01e depth-0 root task_c100g6qenr, delegated depth-1 task_cewq9hhhk6 to real Claude Code 2.1.226, received COMPLETE, and persisted numeric worker telemetry plus an internal handle; source fingerprint unchanged",
+    "claude_native": "Claude Code 2.1.226 loaded the approved project bridge, caller=claude, created run_btw1s4k5y0 depth-0 root task_9xt0qkqenn, delegated depth-1 task_ty0vb72e05 to real Codex App Server 0.147.0, consumed node v24.14.0, completed both tasks, and persisted numeric Codex telemetry plus an internal handle; source fingerprint unchanged by the smoke",
+    "deterministic": "startup identity, spoof rejection, allow/deny policy, root/child lineage, run preservation, depth increment, ancestor rejection, max depth, redaction, stdout purity, and separate stdio shared-state checks pass; SQLite concurrent bootstrap passed 20/20 stress iterations after a bounded busy timeout fix",
+    "quality_gates": "npm ci exit 0; npm ls exit 0; typecheck exit 0; build exit 0; full tests 255/255 passed; project configuration regression 3/3 passed",
+    "dependency_boundaries": "0 violations",
+    "secret_scan": "0 unexpected credential hits; 11 regex hits are confined to explicit synthetic test fixtures",
+    "cleanup": "19 exact task temporaries remain because recursive deletion was blocked; four proof-owned processes were closed precisely, zero proof children remain, and bridge.db plus WAL/SHM passed 3/3 exclusive opens"
+  },
+  "blockers": [],
+  "next_action": "Use the completed native bridge evidence for the controlled benchmark; do not modify or retag the certified historical baseline."
+}

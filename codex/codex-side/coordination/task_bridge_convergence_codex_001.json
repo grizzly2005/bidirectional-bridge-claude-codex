@@ -1,0 +1,49 @@
+{
+  "task_id": "BRIDGE-CONVERGENCE-CODEX-001",
+  "owner": "codex",
+  "objective": "Converge the production Codex integration on the neutral shared MCP server, persist and resume Codex execution handles, enforce the canonical shell environment policy, and verify a real neutral-server delegation.",
+  "scope": {
+    "paths": [
+      "codex/**"
+    ],
+    "note": "Codex-exclusive implementation subtree; coordination requests are append-only"
+  },
+  "dependencies": [
+    "BRIDGE-CONVERGENCE-SHARED-001"
+  ],
+  "expected_deliverable": "A tested @bridge/codex-side package with no Claude-side runtime dependency, a neutral-core launcher, persisted/reloaded thread ids, canonical environment filtering, and exact verification exit codes.",
+  "verification_criteria": [
+    "Codex typecheck exits 0",
+    "Codex build exits 0",
+    "Codex tests exit 0 and cover secret exclusion, duplicate idempotency, COMPLETE evidence, restart resume, failure shutdown, and scope rejection",
+    "Official codex mcp-server tool probe exits 0 and lists codex plus codex-reply",
+    "A real Codex invocation exits 0",
+    "A real control-plane delegation through @bridge/mcp-server-core exits 0",
+    "npm pack --dry-run for @bridge/codex-side exits 0"
+  ],
+  "status": "DONE",
+  "progress": 1,
+  "artifacts": [
+    "codex/codex-side/src/",
+    "codex/codex-side/README.md",
+    "codex/codex-side/dist/"
+  ],
+  "verification_summary": {
+    "codex_typecheck": "exit 0",
+    "codex_build": "exit 0",
+    "codex_tests": "exit 0; 38 passed",
+    "official_codex_mcp_probe": "exit 0; READY; codex and codex-reply",
+    "real_codex_invocation": "exit 0; COMPLETE; synthetic secret-named variable excluded; execution handle captured",
+    "real_control_plane_delegation": "exit 0; @bridge/mcp-server-core; DONE; one attempt; persisted execution handle",
+    "package_dry_run": "exit 0; 31 entries; shasum cdcbeb1cc5961c08f5dedd10e1c96219d22771ed"
+  },
+  "blockers": [],
+  "remaining_risks": [
+    "The active root node_modules workspace links are stale after the shared package move; req_codex_live_workspace_refresh_001 is open.",
+    "Whole-repository clean-install and bidirectional tests remain outside this Codex-owned verification and must pass before the bridge is marked COMPLETE."
+  ],
+  "dependencies_unblocked": [
+    "Claude may remove the deprecated @bridge/claude-side BridgeMcpServer compatibility re-export (ack-req-002-codex)."
+  ],
+  "next_action": "Integration owner should refresh the root workspace install, run the clean-install and bidirectional suites, and keep the whole bridge non-COMPLETE until both pass."
+}

@@ -1,0 +1,44 @@
+{
+  "task_id": "task_s0ax53s0aj",
+  "label": "task_codex_adapter_001",
+  "owner": "codex",
+  "objective": "Implement the production Codex MCP adapter and its deterministic result-collection lifecycle without modifying Claude-owned modules.",
+  "scope": {
+    "paths": [
+      "codex/**"
+    ],
+    "note": "Codex-specific implementation only"
+  },
+  "dependencies": [],
+  "expected_deliverable": "A tested @bridge/codex-side package that starts and resumes bounded Codex tasks through the official Codex MCP server, returns structured deliverables, and never writes coordination state directly.",
+  "verification_criteria": [
+    "TypeScript typecheck succeeds under the repository strict settings",
+    "Unit tests cover start, resume, timeout, malformed MCP results, process failure, and concurrent-run isolation",
+    "A local smoke test reaches the bundled official Codex MCP server or records the exact environment blocker",
+    "No file outside codex/** is modified except an append-only coordination request if required"
+  ],
+  "status": "BLOCKED",
+  "progress": 0.98,
+  "lease_id": "lease_6k718qfq23",
+  "artifacts": [],
+  "artifact_paths": [
+    "codex/codex-side/dist/",
+    "codex/codex-side/src/",
+    "codex/codex-side/examples/codex-project-config.toml",
+    "codex/codex-side/test/fixtures/fake-codex-mcp-server.mjs"
+  ],
+  "blockers": [
+    "All 134 repository assertions pass, but Claude-owned smoke teardown races SQLite close and makes npm test exit 1 on Windows; request req_codex_windows_smoke_cleanup_001 is pending",
+    "Claude-owned package-lock.json needs refresh for the new @bridge/claude-side workspace dependency; request req_codex_lockfile_001 is pending"
+  ],
+  "verification_summary": {
+    "codex_tests": "33 passed",
+    "typecheck": "exit 0",
+    "build": "exit 0",
+    "official_mcp_probe": "READY: codex, codex-reply",
+    "live_adapter_invocation": "COMPLETE: node --version v24.14.0, exit 0",
+    "control_plane_delegation": "task_tn49ks4b3d COMPLETE in one attempt",
+    "repository_suite": "134 assertions passed; process exit 1 from Claude smoke teardown EBUSY"
+  },
+  "next_action": "Claude should resolve req_codex_windows_smoke_cleanup_001 and req_codex_lockfile_001; then rerun npm test and npm ci before changing this task to DONE."
+}

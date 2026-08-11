@@ -1,0 +1,16 @@
+# Copy this table into <trusted-project>/.codex/config.toml after replacing every
+# placeholder with an absolute local path. This example is intentionally inert.
+
+[mcp_servers.bridge_coordination]
+command = '<ABSOLUTE_NODE_EXECUTABLE>'
+args = [
+  '<ABSOLUTE_BRIDGE_REPOSITORY>\codex\codex-side\dist\bridge-server.js',
+  '--workspace',
+  '<ABSOLUTE_BRIDGE_REPOSITORY>',
+  '--agent',
+  'codex',
+]
+cwd = '<ABSOLUTE_BRIDGE_REPOSITORY>'
+required = true
+startup_timeout_sec = 15
+tool_timeout_sec = 900

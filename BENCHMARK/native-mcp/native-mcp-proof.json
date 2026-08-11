@@ -1,0 +1,291 @@
+{
+  "task_id": "BRIDGE-NATIVE-MCP-001",
+  "status": "COMPLETE",
+  "branch": "bench/bridge-pilot-v1",
+  "baseline_commit": "5959e8df3d8707cc1ee5a588c407c7255b3c74a5",
+  "shared_launcher": {
+    "path": "scripts/native-bridge-mcp.mjs",
+    "composition": [
+      "@bridge/mcp-server-core",
+      "ClaudeAdapter with authenticated ClaudeCodeRunner",
+      "CodexAdapter with telemetry-capable Codex App Server client"
+    ],
+    "stdout_protocol_only": true,
+    "shared_database_default": ".bridge/bridge.db"
+  },
+  "project_configuration": {
+    "codex": {
+      "path": ".codex/config.toml",
+      "present": true,
+      "strict_config_parse": "passed during real codex exec",
+      "discovery_exit_code": 0,
+      "caller": "codex",
+      "delegation": "allow"
+    },
+    "claude": {
+      "path": ".mcp.json",
+      "present": true,
+      "status": "CONNECTED",
+      "reason": "The delegated Claude runtime respected its sensitive-file guard. The official project-scoped CLI created the file, the human approved it, and native discovery then reported Connected.",
+      "schema_parse": "passed",
+      "discovery_exit_code": 0,
+      "human_project_approval": "completed",
+      "launcher": "node ${CLAUDE_PROJECT_DIR:-.}/scripts/native-bridge-mcp.mjs",
+      "caller": "claude",
+      "delegation": "allow",
+      "delegated_real_attempts": 2,
+      "delegated_attempt_statuses": [
+        "PARTIAL",
+        "PARTIAL"
+      ]
+    }
+  },
+  "caller_identity": {
+    "omitted_uses_bound_identity": true,
+    "matching_identity_accepted": true,
+    "claude_cannot_claim_codex": true,
+    "codex_cannot_claim_claude": true,
+    "error_code": "INVALID_ARGUMENT"
+  },
+  "delegation_policy": {
+    "allow_codex_to_real_claude": "passed",
+    "allow_claude_to_real_codex": "passed through the approved native Claude Code client",
+    "deny_codex_to_claude": "passed in the real launcher process regression",
+    "deny_claude_to_codex": "passed in the real launcher process regression"
+  },
+  "anti_loop": {
+    "scenario": "Claude root -> Codex child -> delegate back to Claude",
+    "result": "deterministic INVALID_ARGUMENT rejection before child creation",
+    "maximum_delegation_depth": 32,
+    "max_depth_regression": "passed"
+  },
+  "codex_native": {
+    "client": "codex-cli 0.147.0",
+    "project_mcp_discovered": true,
+    "server_info": {
+      "caller": "codex",
+      "delegation": "allow"
+    },
+    "run_id": "run_d8pn9zy01e",
+    "root_task_id": "task_c100g6qenr",
+    "root_parent_task_id": null,
+    "root_depth": 0,
+    "root_state": "DONE",
+    "root_deliverable_status": "COMPLETE",
+    "child_task_id": "task_cewq9hhhk6",
+    "child_parent_task_id": "task_c100g6qenr",
+    "child_depth": 1,
+    "child_agent": "claude",
+    "child_state": "DONE",
+    "child_deliverable_status": "COMPLETE",
+    "child_execution_handle_persisted": true,
+    "child_execution_handle_exported": false,
+    "attempt_telemetry_recorded_events": 1,
+    "codex_native_usage": {
+      "input_tokens": 1119562,
+      "cached_input_tokens": 1075200,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 11170,
+      "total_tokens": 1130732
+    },
+    "claude_worker_telemetry": {
+      "runtime": "claude-code",
+      "runtime_version": "2.1.226",
+      "model": "claude-opus-5",
+      "input_tokens": 40730,
+      "output_tokens": 421,
+      "total_tokens": 41151,
+      "turn_count": 2,
+      "process_exit_code": 0,
+      "termination_kind": "completed"
+    },
+    "rework_observed": {
+      "failed_sibling_attempts": 1,
+      "failed_process_exit_code": 1,
+      "final_sibling_complete": true
+    },
+    "jsonl_event_count": 46,
+    "invalid_stdout_lines": 0,
+    "source_fingerprint_before": "737f237aecbc082d740df135e8d4df036d28987f61dd193f14a8778268eb2758",
+    "source_fingerprint_after": "737f237aecbc082d740df135e8d4df036d28987f61dd193f14a8778268eb2758",
+    "source_modified": false
+  },
+  "claude_native": {
+    "client": "Claude Code 2.1.226",
+    "project_mcp_discovered": true,
+    "project_mcp_state": "Connected",
+    "discovery_exit_code": 0,
+    "server_info": {
+      "caller": "claude",
+      "delegation": "allow"
+    },
+    "run_id": "run_btw1s4k5y0",
+    "root_task_id": "task_9xt0qkqenn",
+    "root_parent_task_id": null,
+    "root_depth": 0,
+    "root_state": "DONE",
+    "root_deliverable_status": "COMPLETE",
+    "root_consumed_worker_result": "node --version exited 0 and returned v24.14.0",
+    "child_task_id": "task_ty0vb72e05",
+    "child_parent_task_id": "task_9xt0qkqenn",
+    "child_depth": 1,
+    "child_agent": "codex",
+    "child_state": "DONE",
+    "child_deliverable_status": "COMPLETE",
+    "child_changed_scope": [],
+    "child_verification": {
+      "command": "node --version",
+      "exit_code": 0,
+      "output": "v24.14.0"
+    },
+    "codex_worker_telemetry": {
+      "runtime": "codex-app-server",
+      "runtime_version": "0.147.0",
+      "model": "gpt-5.6-sol",
+      "input_tokens": 44935,
+      "cached_input_tokens": 28160,
+      "cache_creation_input_tokens": 0,
+      "output_tokens": 570,
+      "total_tokens": 45505,
+      "turn_count": 1,
+      "cumulative_session_tokens": 45505,
+      "termination_kind": "completed",
+      "process_exit_code": null,
+      "process_exit_code_note": "The long-lived App Server remained healthy when the completed turn was recorded; the delegated node command itself exited 0."
+    },
+    "claude_native_result_usage": {
+      "usage_source": "Claude Code result-frame metadata; cached and newly-created input are included in normalized input",
+      "initial_turn": {
+        "raw_uncached_input_tokens": 23,
+        "cached_input_tokens": 271941,
+        "cache_creation_input_tokens": 34631,
+        "normalized_input_tokens": 306595,
+        "output_tokens": 10420,
+        "normalized_total_tokens": 317015,
+        "turn_count": 14,
+        "duration_ms": 164505,
+        "runtime_reported_cost_usd": 0.7444205
+      },
+      "same_session_finalization": {
+        "raw_uncached_input_tokens": 7,
+        "cached_input_tokens": 117508,
+        "cache_creation_input_tokens": 41796,
+        "normalized_input_tokens": 159311,
+        "output_tokens": 3302,
+        "normalized_total_tokens": 162613,
+        "turn_count": 7,
+        "duration_ms": 37055,
+        "runtime_reported_cost_usd": 0.559299
+      },
+      "combined": {
+        "raw_uncached_input_tokens": 30,
+        "cached_input_tokens": 389449,
+        "cache_creation_input_tokens": 76427,
+        "normalized_input_tokens": 465906,
+        "output_tokens": 13722,
+        "normalized_total_tokens": 479628,
+        "turn_count": 21,
+        "duration_ms": 201560,
+        "runtime_reported_cost_usd": 1.3037195
+      }
+    },
+    "native_session_continuation": {
+      "used": true,
+      "same_session": true,
+      "session_id_observed": true,
+      "session_id_length": 36,
+      "session_id_value_exported": false,
+      "additional_delegations": 0,
+      "reason": "Finalized the existing VERIFYING root after correcting a proof-only expectation that had treated a valid null App Server process exit as failure."
+    },
+    "child_execution_handle_persisted": true,
+    "child_execution_handle_length": 36,
+    "child_execution_handle_exported": false,
+    "attempt_telemetry_recorded_events": 1,
+    "telemetry_forbidden_export_keys": [],
+    "source_fingerprint_before": "9dc7bc55f0a5d4a8881e452128cfbd538e1a53bf81ae13a98183a0c4381b3ce3",
+    "source_fingerprint_after_smoke_before_evidence_update": "9dc7bc55f0a5d4a8881e452128cfbd538e1a53bf81ae13a98183a0c4381b3ce3",
+    "source_modified_by_smoke": false,
+    "proof_processes_closed": 4,
+    "unexpected_proof_children_remaining": 0,
+    "sqlite_exclusive_open": "3/3"
+  },
+  "claude_config_delegation": {
+    "run_id": "run_b063j080pb",
+    "root_task_id": "task_dbqrdh4ecy",
+    "attempts": [
+      {
+        "task_id": "task_bxq9pe8vvm",
+        "status": "PARTIAL",
+        "runtime_version": "2.1.226",
+        "model": "claude-opus-5",
+        "total_tokens": 187432,
+        "process_exit_code": 0
+      },
+      {
+        "task_id": "task_w8q2vcck50",
+        "status": "PARTIAL",
+        "runtime_version": "2.1.226",
+        "model": "claude-opus-5",
+        "total_tokens": 132651,
+        "process_exit_code": 0
+      }
+    ],
+    "raw_handles_exported": false,
+    "raw_prompts_exported": false
+  },
+  "deterministic_evidence": {
+    "core_regressions": "22/22 passed in the latest targeted run",
+    "separate_stdio_shared_state": "passed on retry; three launcher processes closed and the temporary workspace was removed",
+    "concurrent_startup_stress": {
+      "iterations": 20,
+      "failures": 0,
+      "sqlite_busy_timeout_ms": 5000
+    },
+    "project_config_pair_parse": "3/3 passed; both project configurations resolve to the same neutral launcher",
+    "full_quality_gates": {
+      "npm_ci_exit_code": 0,
+      "npm_ls_exit_code": 0,
+      "typecheck_exit_code": 0,
+      "tests_exit_code": 0,
+      "tests_passed": 255,
+      "tests_total": 255,
+      "tests_failed": 0,
+      "only_test_failure": null,
+      "build_exit_code": 0,
+      "dependency_boundary_exit_code": 0,
+      "dependency_boundary_violations": 0,
+      "secret_scan_exit_code": 0,
+      "unexpected_credential_hits": 0,
+      "synthetic_test_fixture_hits": 11,
+      "git_diff_check_exit_code": 0
+    }
+  },
+  "global_configuration": {
+    "native_launcher_mentioned_in_codex_global_config": false,
+    "native_launcher_mentioned_in_claude_global_config": false,
+    "client_managed_state_hash_changed": true,
+    "global_contents_captured": false,
+    "manual_global_edit_performed": false
+  },
+  "cleanup": {
+    "prior_task_entries_classified": 17,
+    "sqlite_entries_exclusive_open_passed": 16,
+    "schema_probe_directories": 1,
+    "deletion": "blocked_by_execution_policy",
+    "remaining_prior_task_entries": 17,
+    "additional_native_task_temp_directories": 2,
+    "remaining_task_specific_temp_entries": 19,
+    "proof_processes_closed": 4,
+    "unexpected_proof_children_remaining": 0,
+    "runtime_sqlite_exclusive_open": "3/3",
+    "unrelated_pdx_paths_touched": false
+  },
+  "remaining_risks": [
+    "The non-interactive Claude worker uses an explicit Bash allowlist; task scope is contractually enforced by the bridge lease, but Bash is not an operating-system sandbox.",
+    "Nineteen task-specific temporary entries remain because the execution policy rejected recursive deletion before any target was removed.",
+    "Claude Code 2.1.226 print mode left two proof CLI parents and their two MCP bridge children alive after producing successful result frames; the verifier identified the exact proof-owned PIDs, terminated only those four processes, and then proved zero proof children plus exclusive SQLite access.",
+    "Both native clients changed their own private client-state hashes during real runs; no project bridge launcher reference or global bridge MCP definition was found in those files."
+  ],
+  "required_user_action": null
+}

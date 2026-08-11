@@ -1,0 +1,40 @@
+{
+  "name": "bidirectional-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Experimental MCP coordination bridge for bounded bidirectional delegation between Claude Code and OpenAI Codex",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/grizzly2005/bidirectional-bridge-claude-codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/grizzly2005/bidirectional-bridge-claude-codex/issues"
+  },
+  "homepage": "https://github.com/grizzly2005/bidirectional-bridge-claude-codex#readme",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "workspaces": [
+    "shared/*",
+    "claude/*",
+    "codex/*"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build --force",
+    "clean": "tsc --build --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "links:check": "node scripts/repair-workspace-links.mjs",
+    "links:fix": "node scripts/repair-workspace-links.mjs --fix",
+    "live:claude": "node claude/claude-side/scripts/live-claude-delegation.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.6"
+  },
+  "overrides": {
+    "vite": "6.4.3"
+  }
+}

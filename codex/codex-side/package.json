@@ -1,0 +1,39 @@
+{
+  "name": "@bridge/codex-side",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Production Codex adapter for the local Claude <-> Codex coordination bridge",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "examples"
+  ],
+  "bin": {
+    "bridge-codex-mcp": "./dist/bridge-server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --config vitest.config.ts codex/codex-side",
+    "serve": "node --enable-source-maps dist/bridge-server.js",
+    "smoke": "node --enable-source-maps dist/smoke.js",
+    "smoke:invoke": "node --enable-source-maps dist/smoke.js --invoke",
+    "smoke:delegate": "node --enable-source-maps dist/delegation-smoke.js"
+  },
+  "dependencies": {
+    "@bridge/mcp-server-core": "0.1.0",
+    "@bridge/protocol": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/codex": "^0.147.0"
+  }
+}

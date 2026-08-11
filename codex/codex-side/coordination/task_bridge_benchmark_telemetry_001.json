@@ -1,0 +1,54 @@
+{
+  "task_id": "BRIDGE-BENCHMARK-TELEMETRY-001",
+  "owner": "codex",
+  "objective": "Implement the minimum neutral per-attempt telemetry needed for the first Claude-alone, Codex-alone, and bridged benchmark, with authoritative numeric token usage from both real runtimes.",
+  "scope": {
+    "paths": [
+      "codex/**",
+      "shared/protocol/src/{ids,types,schemas,adapter}.ts",
+      "shared/control-plane/src/{task-service,attempt-service,orchestrator,telemetry.test}.ts",
+      "shared/control-plane/src/store/{state-store,sqlite-store}.ts",
+      "shared/mcp-server-core/src/{tools,tools.test}.ts",
+      "BENCHMARK/audit/**",
+      "BENCHMARK/telemetry/**",
+      "certification/manifest-v1.json"
+    ],
+    "note": "Claude owns claude/** independently through a real bridge delegation. Certification manifest changes are deferred until intended files stabilize."
+  },
+  "dependencies": [
+    "BRIDGE-TELEMETRY-AUDIT-001"
+  ],
+  "expected_deliverable": "A durable neutral AttemptTelemetry record, run lineage propagation, real Claude and Codex token collectors, deterministic regression coverage, and redacted same-tree live proof artifacts.",
+  "verification_criteria": [
+    "Numeric input_tokens, output_tokens, and total_tokens are captured from authoritative runtime frames for real Claude and real Codex tasks",
+    "One final telemetry record is durably persisted per attempt and queryable by run_id, task_id, agent, and attempt",
+    "run_id, parent_task_id, and delegation_depth propagate through delegated child tasks",
+    "Tests cover persistence, unknown fields, lineage, total normalization, resume, retries, and exclusion of prompts, credentials, and raw execution handles",
+    "Repository typecheck, tests, and build pass",
+    "Real Claude, real Codex, and real Codex-manager to Claude-worker delegations pass without mocks",
+    "No unexpected child process remains"
+  ],
+  "status": "DONE",
+  "progress": 1,
+  "artifacts": [
+    "BENCHMARK/audit/telemetry-capabilities.json",
+    "BENCHMARK/audit/telemetry-gap-report.md",
+    "BENCHMARK/telemetry/schema.md",
+    "BENCHMARK/telemetry/live-proof.json"
+  ],
+  "evidence": {
+    "baseline_branch": "bench/bridge-pilot-v1",
+    "baseline_commit": "5959e8df3d8707cc1ee5a588c407c7255b3c74a5",
+    "codex_app_server_probe": "exit 0; Codex Desktop/0.147.0; gpt-5.6-sol; thread/tokenUsage/updated correlated to the created thread and turn; numeric input/output/total observed",
+    "codex_execution_decision": "A passive sidecar cannot receive notifications from the separate MCP execution process. An opt-in App Server client now supplies correlated telemetry while the certified MCP client remains the default regression path.",
+    "dogfood_claude_delegation": "Real bridge delegations wrote only claude/**. Claude hit bounded max_turns before its structured final response, but the delegated implementation was independently verified by 89/89 targeted tests, global typecheck, and authenticated numeric live proof.",
+    "claude_live": "exit 0; claude-code 2.1.226; claude-opus-5; root AttemptTelemetry numeric input=40334 output=458 total=40792; one telemetry event; handle persisted and redacted",
+    "codex_live": "exit 0; codex-app-server 0.147.0; gpt-5.6-sol; root AttemptTelemetry numeric input=44853 output=463 total=45316; one telemetry event; handle persisted and redacted",
+    "cross_agent_live": "exit 0; run_6wefkd2taq; real Codex parent task_9tp0ya4z15 depth 0 COMPLETE total=69632; real Claude child task_4m45g6h2rh depth 1 COMPLETE total=40393; combined=110025",
+    "codex_resume": "exit 0; fresh App Server process resumed the same persisted handle; semantic continuation true; resumed turn input=18134 output=9 total=18143 cumulative=36095",
+    "quality_gates": "git diff --check exit 0; typecheck exit 0; tests exit 0 (248/248); build exit 0; official Codex MCP smoke exit 0; certified Claude smoke exit 0",
+    "cleanup": "0 unexpected bridge children; 16/16 task SQLite files accepted exclusive opens; deletion of 17 task temporary entries was denied by the execution policy before deletion"
+  },
+  "blockers": [],
+  "next_action": "Run BRIDGE-NATIVE-MCP-001 as the immediate follow-up; do not change the certified tag and do not push."
+}

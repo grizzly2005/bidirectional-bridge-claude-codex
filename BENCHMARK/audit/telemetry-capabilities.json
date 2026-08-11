@@ -1,0 +1,812 @@
+{
+  "schema_version": 1,
+  "audit_task_id": "BRIDGE-TELEMETRY-AUDIT-001",
+  "generated_at": "2026-08-09T17:09:17.2022260+02:00",
+  "baseline": {
+    "branch": "bench/bridge-pilot-v1",
+    "tag": "bridge-v0.1.0-certified",
+    "commit": "5959e8df3d8707cc1ee5a588c407c7255b3c74a5",
+    "certification_fingerprint": "86eac9b9f7b0e4a28c820d010e5093c3cc95317cf942fcca7f9bfe333c12c906",
+    "initial_worktree_clean": true
+  },
+  "classification_policy": {
+    "AVAILABLE_NOW": "A concrete value was present in the live bridge/runtime evidence captured on this installation.",
+    "DERIVABLE_NOW": "A deterministic value can be computed from concrete fields captured now, without implementation changes.",
+    "MISSING": "No current signal or value was observed, and no reliable derivation is available.",
+    "UNRELIABLE": "Only partial, optional, free-text, self-reported, or ambiguous evidence exists.",
+    "REQUIRES_IMPLEMENTATION": "Reliable benchmark capture needs a new neutral field, event, or adapter propagation path.",
+    "overall_status_rule": "The top-level status is the conservative end-to-end benchmark classification; bridge, codex, and claude classify each observation surface separately."
+  },
+  "live_evidence": {
+    "codex": {
+      "task_id": "task_nsygpxkjxf",
+      "path": "neutral MCP bridge -> real Codex adapter -> official Codex MCP runtime",
+      "mock_used": false,
+      "task_state": "DONE",
+      "deliverable_status": "COMPLETE",
+      "orchestrator_duration_ms": 18742,
+      "manager_duration_ms": 18743,
+      "event_count": 17,
+      "attempt_count": 1,
+      "execution_handle_present": true,
+      "execution_handle_length": 36,
+      "verification": {
+        "command": "node -e \"console.log('CODEX_TELEMETRY_AUDIT_OK')\"",
+        "exit_code": 0,
+        "duration_ms": 400,
+        "output_excerpt": "CODEX_TELEMETRY_AUDIT_OK"
+      },
+      "runtime_version_probe": {
+        "command": "node node_modules/@openai/codex/bin/codex.js --version",
+        "exit_code": 0,
+        "output": "codex-cli 0.147.0"
+      }
+    },
+    "claude": {
+      "task_id": "task_x662mdqp7g",
+      "path": "Codex manager -> neutral MCP bridge -> real Claude adapter -> Claude Code runtime",
+      "mock_used": false,
+      "task_state": "DONE",
+      "deliverable_status": "COMPLETE",
+      "orchestrator_duration_ms": 112305,
+      "manager_duration_ms": 112306,
+      "event_count": 15,
+      "attempt_count": 1,
+      "reported_turn_count": 2,
+      "execution_handle_present": true,
+      "execution_handle_length": 36,
+      "verification": {
+        "command": "claude --version",
+        "exit_code": 0,
+        "output": "2.1.226 (Claude Code)"
+      },
+      "independent_worker_finding": "The Claude worker could not directly observe wrapper session, model, duration, token, cost, cancellation, timeout, crash, or resume metadata."
+    },
+    "manager_setup_failure": {
+      "worker_invoked": false,
+      "task_created": false,
+      "error_code": "NOT_FOUND",
+      "cause": "The first ephemeral Claude launcher was asserted as supervisor, so its adapter was registered under supervisor rather than claude.",
+      "persistence": "none; the ephemeral database was removed",
+      "audit_significance": "Manager-side setup retries before task creation are not counted by the current bridge."
+    },
+    "existing_control_plane_sample": {
+      "database": ".bridge/bridge.db",
+      "read_only_query_exit_code": 0,
+      "task_count": 7,
+      "event_count": 113,
+      "artifact_count": 12,
+      "status_update_count": 21,
+      "deliverable_count": 7,
+      "verification_count": 14,
+      "idempotency_record_count": 11,
+      "blocker_event_count": 4,
+      "lease_denied_event_count": 0
+    }
+  },
+  "summary_counts": {
+    "AVAILABLE_NOW": 20,
+    "DERIVABLE_NOW": 3,
+    "MISSING": 3,
+    "UNRELIABLE": 11,
+    "REQUIRES_IMPLEMENTATION": 19,
+    "total_metrics": 56
+  },
+  "metrics": [
+    {
+      "metric": "IDENTITY.run_id",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Neither live event stream contains run_id; shared/protocol/src/ids.ts defines newRunId but no audited state/event uses it.",
+      "notes": "A benchmark run cannot currently group multiple delegated tasks under one durable identity."
+    },
+    {
+      "metric": "IDENTITY.task_id",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Codex task task_nsygpxkjxf and Claude task task_x662mdqp7g appear on every task-scoped event and deliverable.",
+      "notes": "Stable and supervisor-visible."
+    },
+    {
+      "metric": "IDENTITY.attempt_id",
+      "bridge": "DERIVABLE_NOW",
+      "codex": "DERIVABLE_NOW",
+      "claude": "DERIVABLE_NOW",
+      "status": "DERIVABLE_NOW",
+      "source": "attempt.started, attempt.handle_set, and attempt.ended expose the integer attempt within a task.",
+      "notes": "There is no standalone attempt_id; use the composite task_id plus attempt number."
+    },
+    {
+      "metric": "IDENTITY.agent",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "BridgeEvent.agent, Task.owner, TaskAttempt.agent, and Deliverable.agent were populated in both live runs.",
+      "notes": "The creator/caller and delegate are distinguishable in delegation.requested and task ownership."
+    },
+    {
+      "metric": "IDENTITY.runtime",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Live snapshots reported official-codex-cli-mcp and claude-adapter(claude-code-cli(claude)).",
+      "notes": "This identifies adapter/runtime implementation, not the selected model."
+    },
+    {
+      "metric": "IDENTITY.runtime_version",
+      "bridge": "MISSING",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Direct probes returned codex-cli 0.147.0 and 2.1.226 (Claude Code), both exit 0; Claude launcher stderr also reported 2.1.226.",
+      "notes": "Versions are currently out-of-band and are not persisted in bridge events or snapshots."
+    },
+    {
+      "metric": "IDENTITY.model",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "Neither live event/result recorded a model. Claude independently reported that prompt-declared model text is unverifiable from the worker.",
+      "notes": "No authoritative model or fallback/switch history is benchmark-visible."
+    },
+    {
+      "metric": "IDENTITY.session_thread_execution_handle",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both task records contained a persisted 36-character handle; attempt.handle_set exposed only attempt and handle_length.",
+      "notes": "Raw handles are deliberately redacted from this audit."
+    },
+    {
+      "metric": "QUALITY.task_status",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both task records reached DONE; task.state_changed events recorded lifecycle transitions.",
+      "notes": "Current state and terminal timestamps are persisted."
+    },
+    {
+      "metric": "QUALITY.deliverable_status",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both live deliverables and delegation.completed events reported COMPLETE.",
+      "notes": "COMPLETE, PARTIAL, and FAILED are structured values."
+    },
+    {
+      "metric": "QUALITY.verification_results",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Codex exposed verification.recorded plus the deliverable result; Claude exposed the result in its deliverable with claude --version exit 0.",
+      "notes": "Claude did not emit a separate verification.recorded event in this run, but the persisted deliverable retained the result."
+    },
+    {
+      "metric": "QUALITY.passed_failed_tests",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "VerificationResult has passed and exit_code per command, but exact test-case totals are only available when a worker includes them in free text/output excerpts.",
+      "notes": "Command-level check counts are derivable; framework-level passed/failed test totals are not a structured metric."
+    },
+    {
+      "metric": "QUALITY.retries",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both DelegationOutcome objects reported attempts: 1; task attempt numbers and attempt events were also present.",
+      "notes": "This covers orchestrator attempts, not internal format repairs or manager setup retries."
+    },
+    {
+      "metric": "QUALITY.rework_attempts",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No structured rework counter exists. Codex may expose a free-text repair status; Claude reported 2 turns, which is not equivalent to rework. The pre-task launcher retry was invisible to the event log.",
+      "notes": "Define rework explicitly before benchmarking it."
+    },
+    {
+      "metric": "QUALITY.changed_scope",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both deliverables contained changed_scope: []; deliverable.submitted repeated the field.",
+      "notes": "This is worker-reported and should be compared with an external tree diff for write-sensitive benchmarks."
+    },
+    {
+      "metric": "QUALITY.artifacts",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Task/deliverable records contained artifact ID lists; the registry stores name, kind, byte count, and SHA-256. Both probes correctly reported zero artifacts.",
+      "notes": "Artifact content is retrievable separately; large content remains path-referenced."
+    },
+    {
+      "metric": "TIME.wall_clock_duration",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "DelegationOutcome.duration_ms was 18742 for Codex and 112305 for Claude; independent manager timers differed by 1 ms.",
+      "notes": "Task created/completed and attempt started/ended timestamps provide a second derivation."
+    },
+    {
+      "metric": "TIME.runtime_model_duration",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No separate model/runtime duration appeared in either event stream. Claude reported wrapper duration fields are outside the worker boundary, but no actual value reached the bridge.",
+      "notes": "Wall time currently mixes orchestration, process startup, model work, and post-processing."
+    },
+    {
+      "metric": "TIME.queue_wait_duration",
+      "bridge": "DERIVABLE_NOW",
+      "codex": "DERIVABLE_NOW",
+      "claude": "DERIVABLE_NOW",
+      "status": "DERIVABLE_NOW",
+      "source": "created_at, claimed_at, attempt.started, and first status timestamps are persisted in both live runs.",
+      "notes": "This derives control-plane scheduling delay only; adapter semaphore/process queue delay has no explicit boundary."
+    },
+    {
+      "metric": "TIME.time_to_first_useful_result",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "The event stream records first status and handle persistence, but neither is defined as a useful result and no first-content timestamp exists.",
+      "notes": "A benchmark needs an explicit useful-result event or semantic rule."
+    },
+    {
+      "metric": "TIME.verification_duration",
+      "bridge": "UNRELIABLE",
+      "codex": "AVAILABLE_NOW",
+      "claude": "MISSING",
+      "status": "UNRELIABLE",
+      "source": "Codex reported duration_ms: 400 on its verification. Claude's claude --version verification omitted duration_ms.",
+      "notes": "The field is optional and cannot currently support cross-runtime comparison."
+    },
+    {
+      "metric": "TOKENS.input_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No input-token value appeared in either live result/event. Claude stated wrapper usage metadata is outside the worker boundary but supplied no captured value.",
+      "notes": "Adapter propagation and a neutral usage schema are required."
+    },
+    {
+      "metric": "TOKENS.output_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No output-token value appeared in either live result/event.",
+      "notes": "Output bytes are not a reliable token substitute."
+    },
+    {
+      "metric": "TOKENS.cached_input_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No cached-input counter appeared in actual bridge outputs.",
+      "notes": "Do not infer cache use from repeated prompts or subscription behavior."
+    },
+    {
+      "metric": "TOKENS.cache_creation_write_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No cache-creation/write counter appeared in actual bridge outputs.",
+      "notes": "Needs runtime-specific mapping into a neutral field."
+    },
+    {
+      "metric": "TOKENS.total_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No component exposed an actual total and the component token counters needed to derive it are absent.",
+      "notes": "Do not estimate from text length in the controlled benchmark."
+    },
+    {
+      "metric": "TOKENS.per_turn_token_usage",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Claude status exposed only a 2-turn count; neither runtime exposed token values per turn.",
+      "notes": "Requires turn-indexed usage records."
+    },
+    {
+      "metric": "TOKENS.cumulative_session_thread_usage",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Execution handles are persisted, but no usage accumulator is associated with them.",
+      "notes": "A raw handle must not become a telemetry key in exported reports; use an internal opaque correlation ID or digest."
+    },
+    {
+      "metric": "TOKENS.reported_monetary_cost",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "MISSING",
+      "source": "No dollar value reached either bridge result. Claude mentioned a wrapper total_cost_usd field outside its view but produced no actual value.",
+      "notes": "There is no auditable cost value for this benchmark run."
+    },
+    {
+      "metric": "TOKENS.subscription_usage_cost_semantics",
+      "bridge": "MISSING",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "No plan or billing mode was inspected. Claude explicitly labelled its subscription inference weak; authentication/configuration was intentionally not read.",
+      "notes": "Even a reported API-equivalent cost must be labelled estimated, billed, or unavailable."
+    },
+    {
+      "metric": "COORDINATION.delegation_count",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Count delegation.requested or delegation.completed events. Each successful live database contained exactly one of each.",
+      "notes": "The initial misconfigured Claude call created no task/event and is therefore not counted."
+    },
+    {
+      "metric": "COORDINATION.delegation_depth",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "No parent task, parent delegation, or depth field exists in the actual request/events.",
+      "notes": "Dependencies are not delegation parentage."
+    },
+    {
+      "metric": "COORDINATION.messages_requests_between_agents",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "MISSING",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "The bridge counts bounded delegation request/completion envelopes. It does not count internal model turns/messages; Claude exposed only the free-text fact that 2 turns finished.",
+      "notes": "Report coordination envelopes separately from runtime conversation turns."
+    },
+    {
+      "metric": "COORDINATION.blocker_count",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Task.blockers and task.blocked events are structured. The current persistent database had 4 blocker events; both audit tasks had zero.",
+      "notes": "Blocker category and responsible actor are not structured."
+    },
+    {
+      "metric": "COORDINATION.ownership_lease_conflicts",
+      "bridge": "UNRELIABLE",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "UNRELIABLE",
+      "source": "Both live runs exposed lease acquire/release with no conflicts. The 113-event persistent sample contained zero lease.denied events, so the conflict shape was not runtime-proven here.",
+      "notes": "The implementation defines lease.denied, but this audit does not promote an unobserved type to AVAILABLE_NOW."
+    },
+    {
+      "metric": "COORDINATION.lease_wait_time",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "MISSING",
+      "source": "The audited control plane acquires or denies leases; no wait interval or waiter lifecycle appeared in runtime evidence.",
+      "notes": "Currently fail-fast rather than queued."
+    },
+    {
+      "metric": "COORDINATION.duplicate_idempotent_requests",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "The persistent database had 11 idempotency records, but a replay returns the cached result without a replay event or counter.",
+      "notes": "Stored unique keys cannot distinguish one call from multiple identical replays."
+    },
+    {
+      "metric": "COORDINATION.retries",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "DelegationOutcome.attempts, Task.attempt, and attempt lifecycle events all reported one attempt for each live task.",
+      "notes": "Manager calls that fail before task creation remain outside this count."
+    },
+    {
+      "metric": "COORDINATION.failed_attempts",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "attempt.ended has a structured outcome; both actual attempts ended COMPLETE, yielding a directly observable failed-attempt count of zero.",
+      "notes": "Failure detail quality depends on the outcome/error code supplied by the adapter path."
+    },
+    {
+      "metric": "COORDINATION.resume_count",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "The certified tag records one successful resume per runtime, and handles are persisted, but no explicit resume.attempted/resume.succeeded event or counter exists.",
+      "notes": "Comparing repeated handles across attempts is suggestive but not a complete counter."
+    },
+    {
+      "metric": "COORDINATION.review_count",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "MISSING",
+      "source": "No review event, review relation, or structured review counter appeared in schemas or live evidence.",
+      "notes": "A task tag containing review would be convention, not reliable telemetry."
+    },
+    {
+      "metric": "HUMAN_SUPERVISION.number_of_human_interventions",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Human messages and manager corrections are outside the bridge event model; this audit's launcher correction was not recorded.",
+      "notes": "Requires explicit supervisor intervention events and correlation to a run/task."
+    },
+    {
+      "metric": "HUMAN_SUPERVISION.agent_questions_requiring_human_input",
+      "bridge": "UNRELIABLE",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "A blocker may contain a question in free text, but no question/request-for-human event exists.",
+      "notes": "Do not count arbitrary question marks in summaries."
+    },
+    {
+      "metric": "HUMAN_SUPERVISION.time_blocked_waiting_for_human",
+      "bridge": "UNRELIABLE",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Blocked/unblocked timestamps can bound total blocked time, but blocker cause and resolution actor are not typed as human.",
+      "notes": "A human_wait reason/category and resolved_at event are needed."
+    },
+    {
+      "metric": "HUMAN_SUPERVISION.automatically_observable",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Neither live task nor the 113-event persistent sample contained human-input lifecycle events.",
+      "notes": "Current answer is no."
+    },
+    {
+      "metric": "CONTEXT_EFFICIENCY.prompt_context_bytes_or_tokens",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Task specs are stored, but the final adapter-built prompt/context and its byte/token size are not persisted in either live run.",
+      "notes": "Store sizes and digests, not raw private prompts."
+    },
+    {
+      "metric": "CONTEXT_EFFICIENCY.artifact_context_references_supplied",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "delegation.requested.input_artifacts and TaskInvocation inputs are explicit. Both live probes recorded an empty list.",
+      "notes": "Reference counts and artifact byte totals are derivable when artifacts are present."
+    },
+    {
+      "metric": "CONTEXT_EFFICIENCY.repeated_context",
+      "bridge": "MISSING",
+      "codex": "MISSING",
+      "claude": "MISSING",
+      "status": "REQUIRES_IMPLEMENTATION",
+      "source": "Artifact hashes can identify repeated artifacts, but prompt/context segments have no digest or repetition accounting.",
+      "notes": "A privacy-preserving context-segment digest is needed."
+    },
+    {
+      "metric": "CONTEXT_EFFICIENCY.full_conversation_history_transferred",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both actual delegation envelopes contained only bounded TaskSpec data and input_artifacts: []; the Codex prompt contract explicitly says not to return chat history.",
+      "notes": "Observed value for both audit runs: false. Session continuation may retain runtime-local history, but the bridge did not transfer manager chat history."
+    },
+    {
+      "metric": "CONTEXT_EFFICIENCY.context_retrieved_from_shared_state",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Input artifact IDs are resolved by the control plane and supplied to the adapter; both actual tasks used zero shared artifacts.",
+      "notes": "The IDs are observable; retrieved byte/token volume is not."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.process_exit_code",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "Verification subprocess exit codes and outer audit command exit 0 were observed, but successful Codex/Claude model-process exit codes are not persisted as attempt telemetry.",
+      "notes": "Transport failures may include an error code, but success lacks a symmetric structured process outcome."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.cancellation",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "No cancellation occurred in the live runs. Task CANCELLED and abort paths exist, but no actual cancellation event/result was captured.",
+      "notes": "Needs a runtime cancellation reason/source field for benchmark use."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.timeout",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "Both runs completed before their deadlines. Timeout error paths exist, but this installation produced no actual timeout event during the audit.",
+      "notes": "A future timeout can surface as an error, but duration and killed-process evidence are not a dedicated record."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.crash",
+      "bridge": "UNRELIABLE",
+      "codex": "UNRELIABLE",
+      "claude": "UNRELIABLE",
+      "status": "UNRELIABLE",
+      "source": "No runtime crash occurred. Adapter failures can become failed attempts, but crash vs transport/protocol/parse failure is not typed in current evidence.",
+      "notes": "Add normalized termination_kind and raw exit/signal fields."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.resume_after_restart",
+      "bridge": "AVAILABLE_NOW",
+      "codex": "AVAILABLE_NOW",
+      "claude": "AVAILABLE_NOW",
+      "status": "AVAILABLE_NOW",
+      "source": "Both audit tasks persisted handles; the bridge-v0.1.0-certified annotation records successful Codex restart-resume and Claude semantic resume on this installation.",
+      "notes": "The capability is proven, but automatic resume counts remain unreliable without explicit resume events."
+    },
+    {
+      "metric": "RUNTIME_HEALTH.remaining_child_processes",
+      "bridge": "MISSING",
+      "codex": "DERIVABLE_NOW",
+      "claude": "DERIVABLE_NOW",
+      "status": "DERIVABLE_NOW",
+      "source": "An external Windows process census after both MCP clients closed found zero matching bridge runtime children; the bridge event/state does not store this.",
+      "notes": "Requires an OS-level supervisor check; it is not self-reported by the bridge."
+    }
+  ],
+  "event_examples": {
+    "redaction_note": "Examples retain only harmless structure. Execution handles, credentials, authentication material, private prompts, and unrelated repository content are omitted.",
+    "snapshot": {
+      "at": 1786287609048,
+      "task_count": 0,
+      "tasks_by_state": {},
+      "ready_task_ids": [],
+      "live_leases": [],
+      "last_event_id": 0,
+      "adapters": [
+        {
+          "agent": "codex",
+          "implementation": "official-codex-cli-mcp",
+          "capabilities": ["code", "tests", "shell", "mcp", "structured-deliverable"]
+        }
+      ]
+    },
+    "task_created": {
+      "event_id": 1,
+      "type": "task.created",
+      "task_id": "task_example",
+      "agent": "supervisor",
+      "at": 1786287609051,
+      "payload": {
+        "objective": "[REDACTED_BOUNDED_OBJECTIVE]",
+        "scope": ["BENCHMARK/audit/.never-write/**"],
+        "dependencies": [],
+        "expected_deliverable": "[REDACTED_DELIVERABLE_DESCRIPTION]",
+        "verification_criteria": ["[REDACTED_CRITERION]"]
+      },
+      "idempotency_key": "[REDACTED_IDEMPOTENCY_KEY]"
+    },
+    "delegation_requested": {
+      "type": "delegation.requested",
+      "task_id": "task_example",
+      "agent": "codex",
+      "at": 1786287732705,
+      "payload": {
+        "to": "claude",
+        "objective": "[REDACTED_BOUNDED_OBJECTIVE]",
+        "deadline_ms": 240000,
+        "input_artifacts": [],
+        "max_attempts": 1
+      }
+    },
+    "task_claimed": {
+      "type": "task.claimed",
+      "task_id": "task_example",
+      "agent": "claude",
+      "at": 1786287732708,
+      "payload": {
+        "previous_state": "PENDING"
+      }
+    },
+    "lease_lifecycle": {
+      "acquired": {
+        "type": "lease.acquired",
+        "task_id": "task_example",
+        "agent": "claude",
+        "payload": {
+          "lease_id": "lease_example",
+          "paths": ["BENCHMARK/audit/.never-write/**"],
+          "expires_at": 1786288002708
+        }
+      },
+      "released": {
+        "type": "lease.released",
+        "task_id": "task_example",
+        "agent": "claude",
+        "payload": {
+          "lease_id": "lease_example",
+          "paths": ["BENCHMARK/audit/.never-write/**"]
+        }
+      }
+    },
+    "attempt_lifecycle": {
+      "started": {
+        "type": "attempt.started",
+        "task_id": "task_example",
+        "agent": "claude",
+        "payload": {
+          "attempt": 0
+        }
+      },
+      "handle_set": {
+        "type": "attempt.handle_set",
+        "task_id": "task_example",
+        "agent": "claude",
+        "payload": {
+          "attempt": 0,
+          "handle_length": 36
+        }
+      },
+      "ended": {
+        "type": "attempt.ended",
+        "task_id": "task_example",
+        "agent": "claude",
+        "payload": {
+          "attempt": 0,
+          "outcome": "COMPLETE"
+        }
+      }
+    },
+    "status_reported_codex": {
+      "type": "status.reported",
+      "task_id": "task_example",
+      "agent": "codex",
+      "payload": {
+        "state": "VERIFYING",
+        "current_action": "Registering Codex artifacts and deterministic evidence",
+        "progress": 0.82,
+        "next_action": "Submit the structured deliverable to the control plane",
+        "blockers": []
+      }
+    },
+    "status_reported_claude": {
+      "type": "status.reported",
+      "task_id": "task_example",
+      "agent": "claude",
+      "payload": {
+        "state": "VERIFYING",
+        "current_action": "claude runtime finished in 2 turn(s)",
+        "progress": 1,
+        "next_action": "submit deliverable",
+        "blockers": []
+      }
+    },
+    "verification_recorded": {
+      "type": "verification.recorded",
+      "task_id": "task_example",
+      "agent": "codex",
+      "payload": {
+        "kind": "test",
+        "command": "[HARMLESS_COMMAND]",
+        "passed": true,
+        "exit_code": 0,
+        "summary": "[REDACTED_SUMMARY]"
+      }
+    },
+    "deliverable_submitted": {
+      "type": "deliverable.submitted",
+      "task_id": "task_example",
+      "agent": "claude",
+      "payload": {
+        "status": "COMPLETE",
+        "summary": "[REDACTED_SUMMARY]",
+        "artifacts": [],
+        "changed_scope": [],
+        "verification_count": 1
+      }
+    },
+    "delegation_completed": {
+      "type": "delegation.completed",
+      "task_id": "task_example",
+      "agent": "claude",
+      "payload": {
+        "status": "COMPLETE",
+        "attempt": 0,
+        "artifacts": []
+      }
+    },
+    "redacted_attempt_record": {
+      "task_id": "task_example",
+      "attempt": 0,
+      "agent": "claude",
+      "execution_handle": "[REDACTED_EXECUTION_HANDLE]",
+      "execution_handle_length": 36,
+      "started_at": 1786287732709,
+      "ended_at": 1786287845010,
+      "outcome": "COMPLETE"
+    },
+    "verification_result": {
+      "kind": "test",
+      "command": "[HARMLESS_COMMAND]",
+      "passed": true,
+      "exit_code": 0,
+      "summary": "[REDACTED_SUMMARY]",
+      "duration_ms": 400,
+      "output_excerpt": "[REDACTED_OUTPUT]"
+    }
+  },
+  "final_validation": {
+    "json_parse_exit_code": 0,
+    "metric_count": 56,
+    "unique_metric_count": 56,
+    "summary_counts_match": true,
+    "credential_shaped_match_count": 0,
+    "raw_uuid_handle_match_count": 0,
+    "tracked_tree_diff_exit_code": 0,
+    "tracked_or_staged_implementation_change_count": 0,
+    "allowed_untracked_artifact_count": 2,
+    "certified_included_set_rehash": {
+      "exit_code": 0,
+      "included_file_count": 101,
+      "sha256": "86eac9b9f7b0e4a28c820d010e5093c3cc95317cf942fcca7f9bfe333c12c906"
+    },
+    "official_manifest_runner": {
+      "exit_code": 1,
+      "reason": "The closed manifest correctly rejects the two newly required, unlisted BENCHMARK/audit artifacts. The manifest/root configuration was not changed because this audit forbids that scope."
+    },
+    "remaining_runtime_processes": 0,
+    "remaining_audit_temp_directories": 0,
+    "never_write_probe_paths_created": false
+  },
+  "redaction": {
+    "credentials_captured": false,
+    "authentication_material_captured": false,
+    "raw_execution_handles_in_artifact": false,
+    "private_conversation_history_captured": false,
+    "notes": "Only task IDs, harmless commands/results, counts, timestamps, implementation labels, and handle presence/length are retained."
+  }
+}

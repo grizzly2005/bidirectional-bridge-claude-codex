@@ -1,0 +1,53 @@
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+/vitest.config.ts.timestamp-*.mjs
+
+# Bridge and SQLite runtime state
+.bridge/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Client-local trust and private state. Keep the shared bridge skill while
+# continuing to ignore every other client-local file by default.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/using-bridge/
+!.claude/skills/using-bridge/**
+.codex/*
+!.codex/config.toml
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/using-bridge/
+!.codex/skills/using-bridge/**
+
+# Logs and temporary workspaces
+*.log
+*.tmp
+*.temp
+*.tgz
+tmp/
+temp/
+scratch/
+
+# Credentials and private key containers
+.env
+.env.*
+!.env.example
+credentials/
+secrets/
+id_rsa
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+
+# Operating-system metadata
+.DS_Store
