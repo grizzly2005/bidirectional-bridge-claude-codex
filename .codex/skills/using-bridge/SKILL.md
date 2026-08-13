@@ -78,6 +78,9 @@ Read `references/contracts.md` when constructing an unfamiliar payload or valida
 ## Respect ownership and leases
 
 - Mutate only tasks owned by the bound caller.
+- A manager may request strict recovery of its direct delegated child only through
+  `bridge_resume_delegated_task`; this does not transfer ownership or authorize other child
+  mutations.
 - Claiming a task is not write permission; acquire a lease before manual writes.
 - Do not write in another holder’s overlapping scope.
 - On `NOT_OWNER`, stop the mutation. Do not steal, finish, block, repair, or release a lease for the other agent’s task.
@@ -113,9 +116,17 @@ Recovery continues the same durable task and runtime session; never redelegate a
 
 1. Call `bridge_recover` to expire dead leases and identify stranded state.
 2. Read the specific task with `bridge_get_task`; do not print its raw execution handle.
-3. If the bound caller owns the task and it is recoverable, call `bridge_resume_task` once.
-4. Keep the same task, run, parent, scope, and runtime session/thread. Recovery creates a new adjacent attempt and a fresh lease.
-5. If strict resume fails, leave the same task blocked and report the exact reason. Do not create a replacement task or fresh thread.
+3. Choose one recovery path and call it once:
+   - if the bound caller owns the task, use `bridge_resume_task`;
+   - if the bound caller owns the direct parent and created the delegated child, use
+     `bridge_resume_delegated_task` from the manager client.
+4. Do not open the other native client merely for recovery. The bridge derives the child
+   owner/runtime from durable state and uses that worker identity internally; do not spoof an
+   owner or use a direct CLI fallback.
+5. Keep the same task, owner, run, parent, scope, and runtime session/thread. Recovery creates
+   a new adjacent attempt and a fresh worker-owned lease.
+6. If strict resume fails, leave the same task blocked and report the exact reason. Do not
+   create a replacement task or fresh thread.
 
 Read `references/recovery-and-failures.md` for failure-specific actions.
 

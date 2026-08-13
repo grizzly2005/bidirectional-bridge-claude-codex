@@ -106,7 +106,9 @@ and if that fails with `SCOPE_CONFLICT`, treat it as the case above.
 
 The bound caller does not own that task or hold that lease. Stop the mutation. Reading state is
 fine; finishing, blocking, repairing, or releasing another agent's work is not. A parent
-manager may read a child's result but cannot mutate the child.
+manager may read a child's result but cannot mutate the child. The sole narrow exception is
+`bridge_resume_delegated_task`: a direct parent owner may request strict recovery when durable
+lineage proves it created that child; the worker remains owner and execution agent.
 
 ### `DEPENDENCY_UNSATISFIED` when entering `WORKING`
 
@@ -136,6 +138,18 @@ The adapter exceeded its deadline. Partial work may exist, so inspect the specif
 before acting, and use only the declared retry budget or strict recovery. Do not blindly
 restart.
 
+### A custom `bridge_delegate` caller disconnects after about 60 seconds
+
+The MCP TypeScript SDK defaults a request to 60,000 ms when a custom client calls
+`Client.callTool` without a `RequestOptions.timeout`. That client-side envelope is independent
+of the delegated task's `deadline_ms`. It also bypasses Codex's project MCP setting
+`tool_timeout_sec = 1800`, which applies only when Codex itself owns the native MCP call.
+
+Use the native project MCP client, or set an explicit request timeout in a custom wrapper that
+is at least as long as the bounded task deadline. A wrapper timeout does not prove that the
+worker stopped: inspect the durable task, then use the appropriate strict recovery operation.
+No asynchronous delegation redesign is implied by this client-side timeout.
+
 ### `RUNTIME_PROFILE_MISMATCH` on a Claude worker
 
 Claude Code reported an actual model that contradicts the bridge-owned `opus` / `high` launch
@@ -162,10 +176,14 @@ eligible task.
 
 1. `bridge_recover` — expires dead leases and identifies stranded state.
 2. `bridge_get_task` — inspect the specific task. Never print its raw execution handle.
-3. `bridge_resume_task` — called **once**, by the existing owner, with the durable `task_id`.
+3. Choose one operation, called **once** with the durable `task_id`:
+   - existing owner: `bridge_resume_task`;
+   - owner of the direct parent that delegated the child: `bridge_resume_delegated_task`.
 
 Expect the same task and runtime session, a new adjacent attempt with `resumed_from_attempt`,
-a fresh lease, separate telemetry, and automatic lease release on every exit path.
+a fresh lease held under the child owner, separate worker telemetry, unchanged ownership, and
+automatic lease release on every exit path. A manager does not need to open the worker's native
+client; the bridge selects the child owner's adapter from durable state.
 
 ### Strict resume fails
 

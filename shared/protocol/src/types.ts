@@ -500,6 +500,13 @@ export interface ResumeTaskRequest {
   readonly idempotency_key?: string;
 }
 
+/** Internal request derived from a caller-bound manager MCP session. */
+export interface ResumeDelegatedTaskRequest {
+  readonly task_id: TaskId;
+  readonly requested_by: AgentId;
+  readonly idempotency_key?: string;
+}
+
 /** Result of resuming one existing task without changing its identity or lineage. */
 export interface ResumeTaskOutcome {
   readonly task_id: TaskId;

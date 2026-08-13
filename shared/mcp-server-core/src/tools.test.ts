@@ -94,6 +94,7 @@ describe("MCP tool surface", () => {
       "bridge_read_events",
       "bridge_set_execution_handle",
       "bridge_resume_task",
+      "bridge_resume_delegated_task",
       "bridge_query_telemetry",
     ]) {
       expect(names).toContain(required);
@@ -367,6 +368,86 @@ describe("MCP tool surface", () => {
       same_execution_handle: true,
       state: TaskState.DONE,
     });
+    expect(cp.tasks.list()).toHaveLength(2);
+  });
+
+  it("resumes a direct delegated child through a minimal manager-bound MCP operation", async () => {
+    const invoked: string[] = [];
+    const adapterFor = (agent: "claude" | "codex"): AgentAdapter => ({
+      info: {
+        agent,
+        implementation: `${agent}-delegated-resume-tool-fixture`,
+        version: "1.0.0",
+        capabilities: ["resume", "structured-deliverable"],
+        max_concurrency: 1,
+      },
+      async health() {
+        return { status: AdapterHealth.READY, checked_at: clock.now() };
+      },
+      async invoke(invocation, invocationContext) {
+        invoked.push(agent);
+        await invocationContext.saveExecutionHandle(invocation.previous_execution_handle!);
+        const check = passing("delegated resume tool fixture");
+        await invocationContext.recordVerification(check);
+        return {
+          task_id: invocation.task_id,
+          agent,
+          status: DeliverableStatus.COMPLETE,
+          summary: "delegated child resumed",
+          changed_scope: [],
+          artifacts: [],
+          commit_or_diff: null,
+          verification_performed: [check.command],
+          verification_results: [check],
+          remaining_risks: [],
+          dependencies_unblocked: [],
+          recommended_next_action: "none",
+          at: clock.now(),
+        };
+      },
+      async cancel() {},
+    });
+    cp.adapters.register(adapterFor("codex"));
+    cp.adapters.register(adapterFor("claude"));
+
+    const parent = cp.tasks.create({
+      spec: spec({ preferred_agent: "codex" }),
+      created_by: "codex",
+      run_id: "run_0000000001",
+    });
+    cp.tasks.claim(parent.task_id, "codex");
+    const child = cp.tasks.create({
+      spec: spec({ scope: CLAUDE_SCOPE, preferred_agent: "claude" }),
+      created_by: "codex",
+      parent_task_id: parent.task_id,
+    });
+    cp.tasks.claim(child.task_id, "claude");
+    cp.tasks.transition({ task_id: child.task_id, agent: "claude", to: TaskState.WORKING });
+    cp.attempts.start(child.task_id, 0, "claude");
+    cp.attempts.saveHandle(child.task_id, 0, "claude", "session_delegated_resume_tool");
+    cp.tasks.block(child.task_id, "claude", "stranded");
+
+    const tool = TOOLS.find(
+      (candidate) => candidate.name === "bridge_resume_delegated_task",
+    )!;
+    expect(Object.keys(tool.inputShape).sort()).toEqual(["idempotency_key", "task_id"]);
+    const resumed = await call(
+      "bridge_resume_delegated_task",
+      { task_id: child.task_id, idempotency_key: "delegated-resume-tool-once" },
+      ctx("codex"),
+    );
+    expect(resumed.isError).toBe(false);
+    expect(resumed.data).toMatchObject({
+      task_id: child.task_id,
+      owner: "claude",
+      previous_attempt: 0,
+      recovered_attempt: 1,
+      resumed_from_attempt: 0,
+      same_execution_handle: true,
+      state: TaskState.DONE,
+    });
+    expect(invoked).toEqual(["claude"]);
+    expect(cp.tasks.get(child.task_id).owner).toBe("claude");
     expect(cp.tasks.list()).toHaveLength(2);
   });
 

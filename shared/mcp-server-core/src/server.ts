@@ -33,8 +33,9 @@ export const DEFAULT_SERVER_INSTRUCTIONS =
   "parent (depth 0); pass its returned run_id and task_id when delegating a depth-1 child. " +
   "Omit caller agent fields because the process identity is already bound at startup. " +
   "Delegation back to an agent in the ancestor lineage is rejected. If a task you own was " +
-  "stranded after persisting a runtime handle, use bridge_resume_task; never create a " +
-  "replacement task for recovery.";
+  "stranded after persisting a runtime handle, use bridge_resume_task. If your owned manager " +
+  "task directly delegated the stranded child, use bridge_resume_delegated_task; the bridge " +
+  "keeps the child owner as execution identity. Never create a replacement task for recovery.";
 
 export interface BridgeServerOptions {
   readonly workspaceRoot: string;

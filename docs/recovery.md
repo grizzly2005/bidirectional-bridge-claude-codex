@@ -10,11 +10,26 @@ thread identifier. The adapter saves it as soon as the runtime exposes it. The c
 caps and credential-screens the value, never parses it, and excludes it from events,
 telemetry, proof exports, and user-facing reports.
 
-## Same-task recovery
+## Recovery entry points
 
-`bridge_resume_task` accepts an existing `task_id` and optional idempotency key. The control
-plane derives the owner, run lineage, write scope, previous attempt, and persisted handle
-from SQLite. It then:
+There are two explicit ways to request the same strict recovery operation. Both accept only
+an existing `task_id` and an optional idempotency key. Caller identity is bound when the MCP
+process starts; neither operation accepts an owner, agent, runtime, lineage, scope, or handle.
+
+- `bridge_resume_task` is direct owner recovery. The bound caller must own the task.
+- `bridge_resume_delegated_task` lets a manager request recovery of its direct delegated
+  child. SQLite must prove that the caller owns the direct parent, created the child, and that
+  parent and child have the expected same-run, adjacent-depth lineage. The caller must not be
+  the child owner; an owner uses `bridge_resume_task`.
+
+Manager authorization does not transfer ownership or make the manager the execution agent.
+For delegated recovery, the child owner remains the identity used for adapter selection, task
+transitions, attempt records, lease ownership, invocation callbacks, verification,
+deliverables, telemetry, and handle persistence. Unrelated tasks, another manager's child,
+and non-direct descendants are rejected.
+
+After authorization, the control plane derives the owner, run lineage, write scope, previous
+attempt, and persisted handle from SQLite. It then:
 
 1. verifies that the task is stranded and recoverable;
 2. rejects live or conflicting leases;
@@ -31,9 +46,15 @@ recorded outcome.
 
 1. Call `bridge_recover` to identify stranded state and expire dead leases.
 2. Inspect the task with `bridge_get_task`; do not request or print its raw handle.
-3. Have the existing owner call `bridge_resume_task` once.
-4. Verify the same task ID, adjacent attempt, `resumed_from_attempt`, fresh lease release,
-   final state, and worker telemetry.
+3. Choose exactly one path:
+   - if the bound caller owns the task, call `bridge_resume_task` once;
+   - if the bound caller owns the task's direct parent and created that child, call
+     `bridge_resume_delegated_task` once from the manager client.
+4. Do not open the other native client merely for recovery. The bridge invokes the child's
+   persisted owner/runtime internally; never use a direct CLI fallback or replacement child.
+5. Verify the same task ID, owner, run, parent, depth, objective, scope, exact-session result,
+   adjacent attempt, `resumed_from_attempt`, fresh worker-owned lease release, final state,
+   and worker telemetry.
 
 Recovery semantics and state transitions are specified in [PROTOCOL.md](PROTOCOL.md) and
 covered deterministically by `shared/control-plane/src/recovery.test.ts`. For symptom-first

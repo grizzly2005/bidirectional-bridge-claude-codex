@@ -285,10 +285,13 @@ declared scope, which is why the bridge is for trusted local repositories only.
 
 Adapters persist an opaque runtime handle (a Claude session id, a Codex thread id) as soon as
 the session exists — not on completion, because the only time anyone needs it is when the run
-died. `bridge_resume_task` takes the durable task ID, derives owner, lineage, scope, and
-handle from SQLite, rejects live or conflicting leases, takes a fresh lease, creates the
-adjacent attempt, and requires strict resume of that exact runtime session. It never accepts
-a caller-supplied handle and never opens a replacement task or thread.
+died. `bridge_resume_task` lets the task owner request strict recovery;
+`bridge_resume_delegated_task` lets a manager request recovery of the direct child it
+delegated while the child owner remains the execution identity. Both take only the durable
+task ID (plus optional idempotency), derive owner, lineage, scope, runtime, and handle from
+SQLite, reject live or conflicting leases, take a fresh worker-owned lease, create the
+adjacent attempt, and require strict resume of that exact runtime session. Neither accepts a
+caller-supplied handle nor opens a replacement task or thread.
 
 See [docs/recovery.md](docs/recovery.md).
 

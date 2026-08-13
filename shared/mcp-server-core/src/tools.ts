@@ -312,6 +312,28 @@ export const TOOLS: readonly ToolDefinition[] = [
       }),
   },
   {
+    name: "bridge_resume_delegated_task",
+    title: "Resume a direct delegated child",
+    description:
+      "Request strict recovery of an existing recoverable child directly delegated by this " +
+      "caller's owned parent task. Authorization comes from durable parent/child lineage; " +
+      "the child owner remains the execution identity for its adapter, attempt, lease, " +
+      "deliverable, telemetry, and persisted runtime session. This operation never transfers " +
+      "ownership, accepts identity overrides, creates a replacement task, or exposes a handle.",
+    inputShape: {
+      task_id: z.string(),
+      ...idemArg,
+    },
+    handler: (args, ctx) =>
+      ctx.orchestrator.resumeDelegatedTask({
+        task_id: args["task_id"] as string,
+        requested_by: ctx.defaultAgent,
+        ...(args["idempotency_key"]
+          ? { idempotency_key: args["idempotency_key"] as string }
+          : {}),
+      }),
+  },
+  {
     name: "bridge_claim_task",
     title: "Claim ownership of a task",
     description:

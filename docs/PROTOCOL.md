@@ -74,16 +74,27 @@ exists**, not on completion — the only time anyone needs it is when the run di
 attempt receives it as `invocation.previous_execution_handle` and may resume, treating a
 failed resume as a normal cold start during an ordinary retry.
 
-`bridge_resume_task` is the stricter stranded-task path. It accepts only a `task_id` and an
-optional idempotency key; owner, lineage, scope, and the opaque handle are read from durable
-state. In one control-plane transaction it validates recoverability and ancestry, rejects
-live or conflicting leases, acquires a fresh lease, closes the interrupted attempt, creates
-the adjacent attempt with `resumed_from_attempt`, and reactivates the same task. Runtime work
-then runs under a deadline with `resume_required=true`. The adapter must confirm the exact
-stored handle: a stale handle or a different returned handle fails the recovery and must
-never start a replacement session. Success or failure seals one telemetry row for the new
-attempt and releases the fresh lease; a runtime failure leaves the task `BLOCKED` and
-recoverable.
+Strict stranded-task recovery has two entry points. `bridge_resume_task` requires the bound
+caller to own the task. `bridge_resume_delegated_task` authorizes the owner of a direct parent
+to request recovery of the child it created, after SQLite proves the direct parent, same run,
+adjacent depth, parent ownership, child creator, child owner, and recoverable persisted state.
+Both accept only a `task_id` and optional idempotency key; owner, lineage, scope, target
+runtime, and opaque handle are read from durable state.
+
+Authorization identity and execution identity are distinct for delegated recovery. The
+manager is only `requested_by`; the child's persisted owner remains the execution agent for
+adapter selection, task transitions, attempts, lease holding, invocation callbacks,
+verification, deliverables, telemetry, and handle persistence. Ownership never transfers.
+Unrelated tasks, another manager's child, and descendants whose direct parent is not owned by
+the caller are rejected.
+
+In one control-plane transaction recovery validates recoverability and ancestry, rejects live
+or conflicting leases, acquires a fresh lease, closes the interrupted attempt, creates the
+adjacent attempt with `resumed_from_attempt`, and reactivates the same task. Runtime work then
+runs under a deadline with `resume_required=true`. The worker adapter must confirm the exact
+stored handle: a stale handle or a different returned handle fails the recovery and must never
+start a replacement session. Success or failure seals one telemetry row for the new attempt
+and releases the fresh lease; a runtime failure leaves the task `BLOCKED` and recoverable.
 
 Constraints, enforced with `INVALID_ARGUMENT`:
 
@@ -207,5 +218,5 @@ Scope: `bridge_acquire_lease`, `bridge_renew_lease`, `bridge_release_lease`.
 Execution: `bridge_set_state`, `bridge_report_status`, `bridge_publish_artifact`,
 `bridge_read_artifact`, `bridge_record_verification`, `bridge_block_task`.
 Completion: `bridge_submit_deliverable`.
-Coordination: `bridge_delegate`, `bridge_resume_task`, `bridge_recover`,
-`bridge_query_telemetry`.
+Coordination: `bridge_delegate`, `bridge_resume_task`, `bridge_resume_delegated_task`,
+`bridge_recover`, `bridge_query_telemetry`.

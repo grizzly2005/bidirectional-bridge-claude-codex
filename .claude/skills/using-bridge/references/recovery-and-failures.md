@@ -6,10 +6,19 @@ Load this reference only for a blocked, failed, interrupted, or stranded bridge 
 
 1. Call `bridge_recover` to expire dead leases and identify stranded tasks.
 2. Call `bridge_get_task` for the exact task. Do not expose the raw handle.
-3. Confirm the current caller owns the task, a persisted handle exists, no live attempt or conflicting lease exists, and the task is non-terminal.
-4. Call `bridge_resume_task` once, preferably with an idempotency key.
-5. Expect the same durable task and runtime session/thread, a new adjacent attempt, `resumed_from_attempt`, a fresh lease, separate telemetry, and automatic lease release.
-6. If resume fails, leave the same task blocked and report the exact failure. Never create a replacement sibling or fresh thread.
+3. Confirm the task is non-terminal, persisted strict-resume state exists, and no live attempt
+   or conflicting lease exists.
+4. Choose one path, preferably with an idempotency key:
+   - current caller owns the task: call `bridge_resume_task` once;
+   - current caller owns the direct parent and created its delegated child: call
+     `bridge_resume_delegated_task` once.
+5. For manager recovery, let the bridge derive the child owner and runtime from SQLite. Do not
+   open the other native client, spoof ownership, or invoke the worker CLI directly.
+6. Expect the same durable task, owner, lineage, and runtime session/thread, a new adjacent
+   attempt, `resumed_from_attempt`, a fresh worker-owned lease, separate worker telemetry, and
+   automatic lease release.
+7. If resume fails, leave the same task blocked and report the exact failure. Never create a
+   replacement sibling or fresh thread.
 
 ## Failure decisions
 
@@ -26,4 +35,9 @@ Load this reference only for a blocked, failed, interrupted, or stranded bridge 
 
 ## Parent/child boundary
 
-A parent manager may read a child result but cannot block, finish, resume, or otherwise mutate a child owned by the other runtime. The child owner performs recovery. After the child reaches a terminal result, the manager consumes it and finalizes its own root.
+A parent manager may read a child result but cannot block, finish, or otherwise mutate a child
+owned by the other runtime. The narrow recovery exception is
+`bridge_resume_delegated_task`: durable state must prove that the caller owns the direct parent
+and created that child. The bridge then executes as the unchanged child owner. This permission
+does not extend to unrelated tasks, siblings from another manager, or non-direct descendants.
+After the child reaches a terminal result, the manager consumes it and finalizes its own root.

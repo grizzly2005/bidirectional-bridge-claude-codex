@@ -25,6 +25,7 @@ import {
   type DelegationOutcome,
   type DelegationRequest,
   type InvocationContext,
+  type ResumeDelegatedTaskRequest,
   type ResumeTaskOutcome,
   type ResumeTaskRequest,
   type StatusUpdate,
@@ -45,10 +46,28 @@ export interface DelegateOptions {
 const DEFAULT_LEASE_GRACE_MS = 30_000;
 const DEFAULT_RECOVERY_DEADLINE_MS = 600_000;
 const RECOVERY_IDEMPOTENCY_OPERATION = "task.resume";
+const DELEGATED_RECOVERY_IDEMPOTENCY_OPERATION = "task.resume.delegated";
 const RESUME_CAPABILITY = "resume";
+
+type RecoveryAuthorizationKind = "owner" | "delegated_manager";
+
+interface RecoveryRequest {
+  readonly task_id: string;
+  readonly requested_by: AgentId;
+  readonly idempotency_key?: string;
+}
+
+interface RecoveryAuthorization {
+  readonly kind: RecoveryAuthorizationKind;
+  readonly requested_by: AgentId;
+  readonly execution_agent: AgentId;
+}
 
 interface RecoveryReservation {
   readonly task_id: string;
+  readonly authorization_kind: RecoveryAuthorizationKind;
+  readonly requested_by: AgentId;
+  readonly execution_agent: AgentId;
   readonly previous_attempt: number;
   readonly recovered_attempt: number;
   readonly resumed_from_attempt: number;
@@ -60,6 +79,7 @@ interface RecoveryReservation {
 
 interface ActiveRecovery {
   readonly idempotency_key?: string;
+  readonly authorization_key: string;
   readonly promise: Promise<ResumeTaskOutcome>;
 }
 
@@ -388,20 +408,34 @@ export class Orchestrator {
    * bounded and occurs after the write lock has been released.
    */
   async resumeTask(request: ResumeTaskRequest): Promise<ResumeTaskOutcome> {
+    return this.resumeAuthorizedTask(request, "owner");
+  }
+
+  /**
+   * Let the owner of a direct parent request strict recovery of its delegated child.
+   * Authorization is evaluated from durable lineage while execution remains bound to the
+   * child's persisted owner. The manager never owns or impersonates the worker task.
+   */
+  async resumeDelegatedTask(
+    request: ResumeDelegatedTaskRequest,
+  ): Promise<ResumeTaskOutcome> {
+    return this.resumeAuthorizedTask(request, "delegated_manager");
+  }
+
+  private async resumeAuthorizedTask(
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
+  ): Promise<ResumeTaskOutcome> {
     const task = this.cp.tasks.get(request.task_id);
-    if (task.owner !== request.requested_by) {
-      throw new BridgeError(
-        ErrorCode.NOT_OWNER,
-        `${request.requested_by} cannot resume a task owned by ${task.owner ?? "nobody"}`,
-        { task_id: task.task_id, owner: task.owner, caller: request.requested_by },
-      );
-    }
+    const authorization = this.authorizeRecoveryIdentity(task, request, kind);
+    const authorizationKey = this.recoveryAuthorizationKey(authorization);
 
     const active = this.activeRecoveries.get(task.task_id);
     if (active !== undefined) {
       if (
         request.idempotency_key !== undefined &&
-        active.idempotency_key === request.idempotency_key
+        active.idempotency_key === request.idempotency_key &&
+        active.authorization_key === authorizationKey
       ) {
         return active.promise;
       }
@@ -412,12 +446,13 @@ export class Orchestrator {
       );
     }
 
-    const replay = this.readRecoveryReservation(request);
+    const replay = this.readRecoveryReservation(request, kind);
     if (replay !== null) return this.replayRecovery(replay);
 
-    const promise = this.resumeTaskOnce(request);
+    const promise = this.resumeTaskOnce(request, kind);
     this.activeRecoveries.set(task.task_id, {
       ...(request.idempotency_key ? { idempotency_key: request.idempotency_key } : {}),
+      authorization_key: authorizationKey,
       promise,
     });
     try {
@@ -428,43 +463,42 @@ export class Orchestrator {
     }
   }
 
-  private async resumeTaskOnce(request: ResumeTaskRequest): Promise<ResumeTaskOutcome> {
-    const prepared = this.prepareRecovery(request);
+  private async resumeTaskOnce(
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
+  ): Promise<ResumeTaskOutcome> {
+    const prepared = this.prepareRecovery(request, kind);
     if (prepared.replayed) return this.replayRecovery(prepared.reservation);
     return this.executeRecovery(request, prepared.reservation);
   }
 
   private prepareRecovery(
-    request: ResumeTaskRequest,
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
   ): { readonly reservation: RecoveryReservation; readonly replayed: boolean } {
     return this.cp.store.transaction(() => {
-      const racedReplay = this.readRecoveryReservation(request);
+      const racedReplay = this.readRecoveryReservation(request, kind);
       if (racedReplay !== null) return { reservation: racedReplay, replayed: true };
 
       const task = this.cp.tasks.get(request.task_id);
-      if (task.owner !== request.requested_by) {
-        throw new BridgeError(
-          ErrorCode.NOT_OWNER,
-          `${request.requested_by} cannot resume a task owned by ${task.owner ?? "nobody"}`,
-          { task_id: task.task_id, owner: task.owner, caller: request.requested_by },
-        );
-      }
+      const authorization = this.authorizeRecoveryIdentity(task, request, kind);
+      const executionAgent = authorization.execution_agent;
       this.cp.tasks.assertRecoverable(task);
       this.cp.tasks.assertPersistedLineage(task);
 
-      const adapter = this.cp.adapters.get(request.requested_by);
+      const adapter = this.cp.adapters.get(executionAgent);
       if (adapter === undefined) {
         throw new BridgeError(
           ErrorCode.NOT_FOUND,
-          `no adapter registered for owner '${request.requested_by}'`,
-          { task_id: task.task_id, owner: request.requested_by },
+          `no adapter registered for owner '${executionAgent}'`,
+          { task_id: task.task_id, owner: executionAgent },
         );
       }
       if (!adapter.info.capabilities.includes(RESUME_CAPABILITY)) {
         throw new BridgeError(
           ErrorCode.UNIMPLEMENTED,
           `adapter '${adapter.info.implementation}' does not advertise persisted-session resume`,
-          { task_id: task.task_id, owner: request.requested_by, capability: RESUME_CAPABILITY },
+          { task_id: task.task_id, owner: executionAgent, capability: RESUME_CAPABILITY },
         );
       }
 
@@ -477,6 +511,18 @@ export class Orchestrator {
         );
       }
       const handle = prior.execution_handle.trim();
+      if (prior.agent !== executionAgent) {
+        throw new BridgeError(
+          ErrorCode.INVALID_ARGUMENT,
+          `task ${task.task_id} attempt ${task.attempt} is not owned by its persisted task owner`,
+          {
+            task_id: task.task_id,
+            attempt: task.attempt,
+            task_owner: executionAgent,
+            attempt_agent: prior.agent,
+          },
+        );
+      }
 
       const liveLeases = this.cp.leases.listLive();
       const liveTaskLease = liveLeases.find((lease) => lease.task_id === task.task_id);
@@ -527,6 +573,8 @@ export class Orchestrator {
           payload: {
             previous_attempt: task.attempt,
             recovered_attempt: recoveredAttempt,
+            authorization_kind: authorization.kind,
+            execution_agent: executionAgent,
           },
           ...(request.idempotency_key ? { idempotency_key: request.idempotency_key } : {}),
         },
@@ -535,7 +583,7 @@ export class Orchestrator {
 
       const lease = this.cp.leases.acquire({
         task_id: task.task_id,
-        holder: request.requested_by,
+        holder: executionAgent,
         scope: task.spec.scope,
         ttl_ms: deadlineMs + DEFAULT_LEASE_GRACE_MS,
       });
@@ -543,19 +591,19 @@ export class Orchestrator {
         this.cp.attempts.end(
           task.task_id,
           task.attempt,
-          request.requested_by,
+          executionAgent,
           "interrupted",
         );
       }
       this.cp.tasks.beginRecovery({
         task_id: task.task_id,
-        agent: request.requested_by,
+        agent: executionAgent,
         next_attempt: recoveredAttempt,
       });
       this.cp.attempts.startResumed(
         task.task_id,
         recoveredAttempt,
-        request.requested_by,
+        executionAgent,
         task.attempt,
         handle,
       );
@@ -563,12 +611,14 @@ export class Orchestrator {
         {
           type: EventType.RESUME_ATTEMPTED,
           task_id: task.task_id,
-          agent: request.requested_by,
+          agent: executionAgent,
           payload: {
             previous_attempt: task.attempt,
             recovered_attempt: recoveredAttempt,
             lease_id: lease.lease_id,
             persisted_handle_present: true,
+            requested_by: request.requested_by,
+            authorization_kind: authorization.kind,
           },
           ...(request.idempotency_key ? { idempotency_key: request.idempotency_key } : {}),
         },
@@ -577,6 +627,9 @@ export class Orchestrator {
 
       const reservation: RecoveryReservation = {
         task_id: task.task_id,
+        authorization_kind: authorization.kind,
+        requested_by: request.requested_by,
+        execution_agent: executionAgent,
         previous_attempt: task.attempt,
         recovered_attempt: recoveredAttempt,
         resumed_from_attempt: task.attempt,
@@ -588,11 +641,8 @@ export class Orchestrator {
       if (request.idempotency_key) {
         this.cp.store.putIdempotency({
           key: request.idempotency_key,
-          operation: RECOVERY_IDEMPOTENCY_OPERATION,
-          request_hash: hashRequest({
-            task_id: request.task_id,
-            requested_by: request.requested_by,
-          }),
+          operation: this.recoveryIdempotencyOperation(kind),
+          request_hash: this.recoveryRequestHash(request, kind),
           response_json: JSON.stringify(reservation),
           created_at: requestedAt,
         });
@@ -602,11 +652,12 @@ export class Orchestrator {
   }
 
   private async executeRecovery(
-    request: ResumeTaskRequest,
+    request: RecoveryRequest,
     reservation: RecoveryReservation,
   ): Promise<ResumeTaskOutcome> {
     const task = this.cp.tasks.get(reservation.task_id);
-    const adapter = this.cp.adapters.get(request.requested_by)!;
+    const executionAgent = reservation.execution_agent;
+    const adapter = this.cp.adapters.get(executionAgent)!;
     const prior = this.cp.attempts.get(task.task_id, reservation.previous_attempt)!;
     const persistedHandle = prior.execution_handle!;
     const inputs = this.cp.artifacts.resolveMany(reservation.input_artifact_ids as ArtifactId[]);
@@ -640,7 +691,7 @@ export class Orchestrator {
     };
     const context = this.makeContext(
       task.task_id,
-      request.requested_by,
+      executionAgent,
       controller.signal,
       reservation.recovered_attempt,
       telemetryUpdate,
@@ -673,7 +724,7 @@ export class Orchestrator {
         terminationKind = AttemptTerminationKind.TIMEOUT;
         throw new BridgeError(
           ErrorCode.TIMEOUT,
-          `resumed adapter '${request.requested_by}' exceeded its ${reservation.deadline_ms}ms deadline`,
+          `resumed adapter '${executionAgent}' exceeded its ${reservation.deadline_ms}ms deadline`,
           { task_id: task.task_id, recovered_attempt: reservation.recovered_attempt },
         );
       }
@@ -688,11 +739,11 @@ export class Orchestrator {
           },
         );
       }
-      if (returned.task_id !== task.task_id || returned.agent !== request.requested_by) {
+      if (returned.task_id !== task.task_id || returned.agent !== executionAgent) {
         throw new BridgeError(
           ErrorCode.ADAPTER_FAILURE,
           "resumed adapter returned a deliverable for the wrong task or agent",
-          { task_id: task.task_id, owner: request.requested_by },
+          { task_id: task.task_id, owner: executionAgent },
         );
       }
 
@@ -700,19 +751,21 @@ export class Orchestrator {
       this.cp.attempts.end(
         task.task_id,
         reservation.recovered_attempt,
-        request.requested_by,
+        executionAgent,
         deliverable.status,
       );
       this.cp.store.appendEvent(
         {
           type: EventType.RESUME_SUCCEEDED,
           task_id: task.task_id,
-          agent: request.requested_by,
+          agent: executionAgent,
           payload: {
             previous_attempt: reservation.previous_attempt,
             recovered_attempt: reservation.recovered_attempt,
             status: deliverable.status,
             same_execution_handle: true,
+            requested_by: request.requested_by,
+            authorization_kind: reservation.authorization_kind,
           },
         },
         this.cp.clock.now(),
@@ -731,18 +784,18 @@ export class Orchestrator {
       this.cp.attempts.end(
         task.task_id,
         reservation.recovered_attempt,
-        request.requested_by,
+        executionAgent,
         runtimeError.code,
       );
       const current = this.cp.tasks.get(task.task_id);
       if (
-        current.owner === request.requested_by &&
+        current.owner === executionAgent &&
         current.state !== TaskState.BLOCKED &&
         !isTerminal(current.state)
       ) {
         this.cp.tasks.block(
           task.task_id,
-          request.requested_by,
+          executionAgent,
           `resume ${runtimeError.code}: ${runtimeError.message}`.slice(0, 500),
         );
       }
@@ -750,12 +803,14 @@ export class Orchestrator {
         {
           type: EventType.RESUME_FAILED,
           task_id: task.task_id,
-          agent: request.requested_by,
+          agent: executionAgent,
           payload: {
             previous_attempt: reservation.previous_attempt,
             recovered_attempt: reservation.recovered_attempt,
             code: runtimeError.code,
             retryable: runtimeError.retryable,
+            requested_by: request.requested_by,
+            authorization_kind: reservation.authorization_kind,
           },
         },
         this.cp.clock.now(),
@@ -773,7 +828,7 @@ export class Orchestrator {
             delegation_depth: task.delegation_depth,
             attempt: reservation.recovered_attempt,
             resumed_from_attempt: reservation.previous_attempt,
-            agent: request.requested_by,
+            agent: executionAgent,
             orchestration_started_at: reservation.requested_at,
             observed_runtime_started_at: runtimeStartedAt,
             observed_runtime_ended_at: runtimeEndedAt,
@@ -788,7 +843,7 @@ export class Orchestrator {
         telemetryError = error;
       }
       try {
-        this.cp.leases.release(reservation.fresh_lease_id, request.requested_by);
+        this.cp.leases.release(reservation.fresh_lease_id, executionAgent);
       } catch (releaseError) {
         if (telemetryError === undefined) telemetryError = releaseError;
       }
@@ -803,7 +858,7 @@ export class Orchestrator {
       run_id: task.run_id,
       parent_task_id: task.parent_task_id,
       delegation_depth: task.delegation_depth,
-      owner: request.requested_by,
+      owner: executionAgent,
       previous_attempt: reservation.previous_attempt,
       recovered_attempt: reservation.recovered_attempt,
       resumed_from_attempt: reservation.previous_attempt,
@@ -820,16 +875,16 @@ export class Orchestrator {
     };
   }
 
-  private readRecoveryReservation(request: ResumeTaskRequest): RecoveryReservation | null {
+  private readRecoveryReservation(
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
+  ): RecoveryReservation | null {
     if (!request.idempotency_key) return null;
     const record = this.cp.store.getIdempotency(request.idempotency_key);
     if (record === undefined) return null;
-    const expectedHash = hashRequest({
-      task_id: request.task_id,
-      requested_by: request.requested_by,
-    });
+    const expectedHash = this.recoveryRequestHash(request, kind);
     if (
-      record.operation !== RECOVERY_IDEMPOTENCY_OPERATION ||
+      record.operation !== this.recoveryIdempotencyOperation(kind) ||
       record.request_hash !== expectedHash
     ) {
       throw new BridgeError(
@@ -843,6 +898,7 @@ export class Orchestrator {
       parsed.task_id !== request.task_id ||
       !Number.isInteger(parsed.previous_attempt) ||
       !Number.isInteger(parsed.recovered_attempt) ||
+      !Number.isInteger(parsed.resumed_from_attempt) ||
       typeof parsed.fresh_lease_id !== "string" ||
       !Array.isArray(parsed.input_artifact_ids) ||
       !parsed.input_artifact_ids.every((artifactId) => typeof artifactId === "string") ||
@@ -854,7 +910,143 @@ export class Orchestrator {
         `stored recovery reservation is invalid for ${request.task_id}`,
       );
     }
-    return parsed as RecoveryReservation;
+    const task = this.cp.tasks.get(request.task_id);
+    const authorization = this.authorizeRecoveryIdentity(task, request, kind);
+    const storedKind = parsed.authorization_kind ?? "owner";
+    const storedRequester = parsed.requested_by ?? request.requested_by;
+    const storedExecutionAgent = parsed.execution_agent ?? request.requested_by;
+    if (
+      storedKind !== authorization.kind ||
+      storedRequester !== authorization.requested_by ||
+      storedExecutionAgent !== authorization.execution_agent
+    ) {
+      throw new BridgeError(
+        ErrorCode.INTERNAL,
+        `stored recovery authorization is invalid for ${request.task_id}`,
+        { task_id: request.task_id },
+      );
+    }
+    return {
+      ...(parsed as RecoveryReservation),
+      authorization_kind: storedKind,
+      requested_by: storedRequester,
+      execution_agent: storedExecutionAgent,
+    };
+  }
+
+  private authorizeRecoveryIdentity(
+    task: Task,
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
+  ): RecoveryAuthorization {
+    if (kind === "owner") {
+      if (task.owner !== request.requested_by) {
+        throw new BridgeError(
+          ErrorCode.NOT_OWNER,
+          `${request.requested_by} cannot resume a task owned by ${task.owner ?? "nobody"}`,
+          { task_id: task.task_id, owner: task.owner, caller: request.requested_by },
+        );
+      }
+      return {
+        kind,
+        requested_by: request.requested_by,
+        execution_agent: request.requested_by,
+      };
+    }
+
+    if (task.parent_task_id === null) {
+      throw new BridgeError(
+        ErrorCode.INVALID_ARGUMENT,
+        `task ${task.task_id} is not a delegated child`,
+        { task_id: task.task_id },
+      );
+    }
+    if (task.owner === null) {
+      throw new BridgeError(
+        ErrorCode.INVALID_ARGUMENT,
+        `delegated child ${task.task_id} has no persisted owner`,
+        { task_id: task.task_id },
+      );
+    }
+    if (task.owner === request.requested_by) {
+      throw new BridgeError(
+        ErrorCode.NOT_OWNER,
+        `owner ${request.requested_by} must use direct owner recovery for ${task.task_id}`,
+        { task_id: task.task_id, owner: task.owner, caller: request.requested_by },
+      );
+    }
+
+    const parent = this.cp.tasks.get(task.parent_task_id);
+    if (
+      task.run_id !== parent.run_id ||
+      task.delegation_depth !== parent.delegation_depth + 1
+    ) {
+      throw new BridgeError(
+        ErrorCode.INVALID_ARGUMENT,
+        `persisted direct-parent lineage is invalid for ${task.task_id}`,
+        {
+          task_id: task.task_id,
+          parent_task_id: parent.task_id,
+          run_id: task.run_id,
+          parent_run_id: parent.run_id,
+          delegation_depth: task.delegation_depth,
+          expected_depth: parent.delegation_depth + 1,
+        },
+      );
+    }
+    if (parent.owner !== request.requested_by) {
+      throw new BridgeError(
+        ErrorCode.NOT_OWNER,
+        `${request.requested_by} does not own direct parent ${parent.task_id}`,
+        {
+          task_id: task.task_id,
+          parent_task_id: parent.task_id,
+          parent_owner: parent.owner,
+          caller: request.requested_by,
+        },
+      );
+    }
+    if (task.created_by !== request.requested_by) {
+      throw new BridgeError(
+        ErrorCode.NOT_OWNER,
+        `${request.requested_by} did not create delegated child ${task.task_id}`,
+        {
+          task_id: task.task_id,
+          parent_task_id: parent.task_id,
+          created_by: task.created_by,
+          caller: request.requested_by,
+        },
+      );
+    }
+
+    return {
+      kind,
+      requested_by: request.requested_by,
+      execution_agent: task.owner,
+    };
+  }
+
+  private recoveryAuthorizationKey(authorization: RecoveryAuthorization): string {
+    return `${authorization.kind}:${authorization.requested_by}:${authorization.execution_agent}`;
+  }
+
+  private recoveryIdempotencyOperation(kind: RecoveryAuthorizationKind): string {
+    return kind === "owner"
+      ? RECOVERY_IDEMPOTENCY_OPERATION
+      : DELEGATED_RECOVERY_IDEMPOTENCY_OPERATION;
+  }
+
+  private recoveryRequestHash(
+    request: RecoveryRequest,
+    kind: RecoveryAuthorizationKind,
+  ): string {
+    return kind === "owner"
+      ? hashRequest({ task_id: request.task_id, requested_by: request.requested_by })
+      : hashRequest({
+          task_id: request.task_id,
+          requested_by: request.requested_by,
+          authorization_kind: kind,
+        });
   }
 
   private replayRecovery(reservation: RecoveryReservation): ResumeTaskOutcome {
