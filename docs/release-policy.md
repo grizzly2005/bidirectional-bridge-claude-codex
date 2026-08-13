@@ -4,7 +4,7 @@
 
 **Experimental · Pre-1.0 · under active development · not production-certified.**
 
-This is the first experimental open-source release of a local coordination bridge. It is
+This is an experimental open-source checkpoint of a local coordination bridge. It is
 published so the design and its evidence can be inspected and criticized, not because it is
 finished or certified for production use.
 
@@ -31,7 +31,7 @@ project does not promise that a database created by one revision will be readabl
 
 ## Versioning
 
-- The package version is `0.1.0` and the workspace root is marked `private`; nothing here is
+- The package/checkpoint version is `0.2.0` and the workspace root is marked `private`; nothing here is
   published to a package registry.
 - While the major version is `0`, a minor bump may carry breaking changes. Treat every version
   change as potentially breaking and read the changelog.

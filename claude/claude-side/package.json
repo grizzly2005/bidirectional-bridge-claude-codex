@@ -1,6 +1,6 @@
 {
   "name": "@bridge/claude-side",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -16,8 +16,8 @@
     "live:telemetry": "node scripts/live-claude-telemetry.mjs"
   },
   "dependencies": {
-    "@bridge/control-plane": "0.1.0",
-    "@bridge/mcp-server-core": "0.1.0",
-    "@bridge/protocol": "0.1.0"
+    "@bridge/control-plane": "0.2.0",
+    "@bridge/mcp-server-core": "0.2.0",
+    "@bridge/protocol": "0.2.0"
   }
 }

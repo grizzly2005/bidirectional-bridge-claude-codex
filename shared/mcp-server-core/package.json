@@ -1,6 +1,6 @@
 {
   "name": "@bridge/mcp-server-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -9,8 +9,8 @@
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "dependencies": {
-    "@bridge/control-plane": "0.1.0",
-    "@bridge/protocol": "0.1.0",
+    "@bridge/control-plane": "0.2.0",
+    "@bridge/protocol": "0.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.76"
   }

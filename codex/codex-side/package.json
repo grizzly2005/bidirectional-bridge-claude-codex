@@ -1,6 +1,6 @@
 {
   "name": "@bridge/codex-side",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -31,8 +31,8 @@
     "smoke:delegate": "node --enable-source-maps dist/delegation-smoke.js"
   },
   "dependencies": {
-    "@bridge/mcp-server-core": "0.1.0",
-    "@bridge/protocol": "0.1.0",
+    "@bridge/mcp-server-core": "0.2.0",
+    "@bridge/protocol": "0.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@openai/codex": "^0.147.0"
   }

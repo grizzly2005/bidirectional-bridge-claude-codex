@@ -1,7 +1,7 @@
 {
   "name": "bidirectional-bridge",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Experimental MCP coordination bridge for bounded bidirectional delegation between Claude Code and OpenAI Codex",
   "license": "MIT",
   "repository": {

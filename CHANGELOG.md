@@ -9,6 +9,54 @@ persisted schema, the telemetry shape, or the documented workflows. See
 Grouped as Added / Changed / Fixed / Documentation / Security. Breaking changes are called out
 explicitly.
 
+## Unreleased
+
+## 0.2.0 — 2026-08-13
+
+### Added
+
+- Add manager-authorized strict recovery for direct delegated child tasks through
+  `bridge_resume_delegated_task`.
+- Add a locally linkable `claude-codex-bridge` executable for external project use.
+- Add portable external project configuration examples for Codex and Claude Code.
+- Add a manually maintained routing policy for bounded delegation decisions.
+- Add deterministic synchronization checks for the Claude/Codex skill mirrors.
+- Add regression coverage for external workspace selection and linked-launcher startup.
+
+### Changed
+
+- Make the native launcher's workspace default to the process current working directory rather
+  than the Bridge source repository.
+- Allow a manager to request strict recovery of its direct delegated child while execution
+  identity, ownership, leases, telemetry, and session handles remain worker-owned.
+- Require substantial tasks to evaluate useful bounded delegation while trivial and tightly
+  coupled work remains local.
+- Allow external repositories to use the Bridge without containing its source launcher.
+- Disable only the project MCP entry named `bridge` inside delegated Codex worker threads to
+  prevent recursive manager-server startup while preserving unrelated project MCP servers.
+
+### Fixed
+
+- Fix the recovery dead end where a manager could delegate to another runtime but could not
+  safely request strict recovery of that worker.
+- Preserve linked-launcher execution through Windows npm junctions and record the launcher's
+  Unix executable bit.
+- Handle bidirectional Codex App Server requests instead of treating them as ordinary RPC
+  responses, and fail closed for unsupported interactive requests.
+- Report failed Codex turns immediately when the runtime emits no token-usage event, rather
+  than waiting until the delegated deadline or fabricating telemetry.
+- Document that custom MCP SDK wrappers must set a request timeout longer than the bounded
+  worker deadline instead of relying on the SDK's 60-second default.
+
+### Documentation
+
+- Document external repository installation and bidirectional manager/worker behavior.
+- Document owner recovery versus manager-authorized delegated recovery.
+- Document manual routing policy maintenance and the prohibition on quota-based or automatic
+  benchmark routing.
+- Document project trust, linked binary lifetime, external `.bridge/` ownership, and the
+  non-recursive Codex worker configuration.
+
 ## 0.1.0 — 2026-08-11
 
 ### Documentation
