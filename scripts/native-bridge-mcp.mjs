@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,7 @@ export const NATIVE_BRIDGE_HELP = `native-bridge-mcp — project-scoped neutral 
 
   --caller          codex | claude (required; bound for the process lifetime)
   --delegation      allow | deny (required; enforced server-side)
-  --workspace       project root (default: repository containing this launcher)
+  --workspace       project root (default: current working directory)
   --db              shared SQLite path (default: <workspace>/.bridge/bridge.db)
   --help            write this help to stderr and exit
 `;
@@ -69,7 +69,7 @@ export function parseNativeBridgeArgs(argv, cwd = process.cwd()) {
     throw new Error("--delegation must be allow or deny");
   }
 
-  const workspace = resolve(cwd, workspaceRaw ?? nativeBridgeRepositoryRoot);
+  const workspace = workspaceRaw ? resolve(cwd, workspaceRaw) : resolve(cwd);
   const databasePath = databaseRaw
     ? isAbsolute(databaseRaw)
       ? resolve(databaseRaw)
@@ -160,8 +160,16 @@ async function main() {
   await runNativeBridge(args);
 }
 
-const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
-if (invokedPath === resolve(launcherPath)) {
+function canonicalPath(path) {
+  try {
+    return realpathSync(resolve(path));
+  } catch {
+    return resolve(path);
+  }
+}
+
+const invokedPath = process.argv[1] ? canonicalPath(process.argv[1]) : "";
+if (invokedPath === canonicalPath(launcherPath)) {
   main().catch((error) => {
     process.stderr.write(`[bridge-native] fatal: ${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;

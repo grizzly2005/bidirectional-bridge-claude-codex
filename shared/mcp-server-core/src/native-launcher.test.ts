@@ -1,5 +1,14 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,21 +37,20 @@ class NativeHarness {
   readonly stderr: string[] = [];
   readonly exited: Promise<number | null>;
 
-  constructor(caller: "codex" | "claude", policy: "allow" | "deny", workspace: string, db: string) {
+  constructor(
+    caller: "codex" | "claude",
+    policy: "allow" | "deny",
+    workspace?: string,
+    db?: string,
+    cwd = repoRoot,
+  ) {
+    const args = [launcher, "--caller", caller, "--delegation", policy];
+    if (workspace !== undefined) args.push("--workspace", workspace);
+    if (db !== undefined) args.push("--db", db);
     this.child = spawn(
       process.execPath,
-      [
-        launcher,
-        "--caller",
-        caller,
-        "--delegation",
-        policy,
-        "--workspace",
-        workspace,
-        "--db",
-        db,
-      ],
-      { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+      args,
+      { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
     ) as ChildProcessWithoutNullStreams;
     this.exited = new Promise((done) => this.child.once("exit", done));
     this.child.stdout.setEncoding("utf8");
@@ -146,6 +154,24 @@ class NativeHarness {
   }
 }
 
+function recursiveFileHashes(root: string): Array<{ readonly path: string; readonly sha256: string }> {
+  const files: string[] = [];
+  const visit = (directory: string, prefix = "") => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) visit(absolute, relative);
+      else if (entry.isFile()) files.push(relative);
+      else throw new Error(`unexpected non-file skill entry: ${relative}`);
+    }
+  };
+  visit(root);
+  return files.sort().map((path) => ({
+    path,
+    sha256: createHash("sha256").update(readFileSync(join(root, ...path.split("/")))).digest("hex"),
+  }));
+}
+
 function taskSpec() {
   return {
     objective: "prove shared native MCP state",
@@ -159,12 +185,57 @@ function taskSpec() {
 describe("native project MCP launcher", () => {
   it("strictly parses startup-bound identity and delegation policy", async () => {
     const module = await import("../../../scripts/native-bridge-mcp.mjs");
-    expect(module.parseNativeBridgeArgs(["--caller", "codex", "--delegation", "allow"]))
-      .toMatchObject({ caller: "codex", delegation: "allow" });
+    const suppliedCwd = resolve(repoRoot, "external-default-workspace-fixture");
+    expect(module.parseNativeBridgeArgs(
+      ["--caller", "codex", "--delegation", "allow"],
+      suppliedCwd,
+    )).toMatchObject({
+      caller: "codex",
+      delegation: "allow",
+      workspace: suppliedCwd,
+      databasePath: join(suppliedCwd, ".bridge", "bridge.db"),
+    });
+    expect(module.parseNativeBridgeArgs(
+      ["--caller", "codex", "--delegation", "allow", "--workspace", "managed", "--db", "state/custom.db"],
+      suppliedCwd,
+    )).toMatchObject({
+      workspace: join(suppliedCwd, "managed"),
+      databasePath: join(suppliedCwd, "managed", "state", "custom.db"),
+    });
     expect(() => module.parseNativeBridgeArgs(["--caller", "claude"]))
       .toThrow("--delegation must be allow or deny");
     expect(() => module.parseNativeBridgeArgs(["--caller", "supervisor", "--delegation", "allow"]))
       .toThrow("--caller must be codex or claude");
+  });
+
+  it("exposes a portable linked command with a Unix shebang", () => {
+    const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
+      readonly private?: boolean;
+      readonly bin?: Record<string, string>;
+    };
+    expect(rootPackage.private).toBe(true);
+    expect(rootPackage.bin).toEqual({
+      "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
+    });
+    expect(readFileSync(launcher, "utf8").split(/\r?\n/u)[0]).toBe("#!/usr/bin/env node");
+    if (process.platform !== "win32") expect(statSync(launcher).mode & 0o111).not.toBe(0);
+  });
+
+  it("runs when npm-style linking reaches the launcher through a symlinked checkout", () => {
+    const temp = mkdtempSync(join(tmpdir(), "bridge-linked-launcher-"));
+    const linkedRoot = join(temp, "bidirectional-bridge");
+    try {
+      symlinkSync(repoRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      const result = spawnSync(
+        process.execPath,
+        [join(linkedRoot, "scripts", "native-bridge-mcp.mjs"), "--help"],
+        { cwd: temp, encoding: "utf8", windowsHide: true },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("default: current working directory");
+    } finally {
+      rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
 
   it("uses portable project configurations that target the same launcher", () => {
@@ -185,7 +256,15 @@ describe("native project MCP launcher", () => {
     expect(claudeEntry?.command).toBe("node");
     expect(codexArgs[0]).toBe("scripts/native-bridge-mcp.mjs");
     expect(claudeEntry?.args?.[0]).toMatch(/scripts[\\/]native-bridge-mcp\.mjs$/u);
-    expect(codexArgs).toEqual(expect.arrayContaining(["--caller", "codex", "--delegation", "allow"]));
+    expect(codexArgs).toEqual([
+      "scripts/native-bridge-mcp.mjs",
+      "--caller",
+      "codex",
+      "--delegation",
+      "allow",
+      "--workspace",
+      ".",
+    ]);
     expect(claudeEntry?.args).toEqual(
       expect.arrayContaining(["--caller", "claude", "--delegation", "allow"]),
     );
@@ -193,7 +272,67 @@ describe("native project MCP launcher", () => {
     const combined = `${codexText}\n${claudeText}`;
     expect(combined).not.toMatch(/[A-Za-z]:[\\/]/u);
     expect(combined).not.toMatch(/api[_-]?key|credential|password|secret|token/iu);
+
+    const externalCodex = readFileSync(
+      join(repoRoot, "codex", "codex-side", "examples", "codex-project-config.toml"),
+      "utf8",
+    );
+    const externalClaudePath = join(
+      repoRoot,
+      "claude",
+      "claude-side",
+      "examples",
+      "claude-project-mcp.json",
+    );
+    expect(existsSync(externalClaudePath)).toBe(true);
+    const externalClaude = readFileSync(externalClaudePath, "utf8");
+    const externalClaudeConfig = JSON.parse(externalClaude) as {
+      readonly mcpServers?: Record<string, { readonly command?: string; readonly args?: string[] }>;
+    };
+    expect(externalCodex).toContain('[mcp_servers.bridge]');
+    expect(externalCodex).toMatch(/command\s*=\s*"claude-codex-bridge"/u);
+    expect(externalCodex).toContain('cwd = "."');
+    expect(externalCodex).toContain('tool_timeout_sec = 1800');
+    expect(externalCodex).toContain('"--workspace", "."');
+    expect(externalClaudeConfig.mcpServers?.["bridge"]?.command).toBe("claude-codex-bridge");
+    expect(externalClaudeConfig.mcpServers?.["bridge"]?.args).toEqual(
+      expect.arrayContaining(["--caller", "claude", "--delegation", "allow", "--workspace", "${CLAUDE_PROJECT_DIR:-.}"]),
+    );
+    const externalCombined = `${externalCodex}\n${externalClaude}`;
+    expect(externalCombined).not.toMatch(/[A-Za-z]:[\\/]/u);
+    expect(externalCombined).not.toMatch(/api[_-]?key|credential|password|secret|token/iu);
+    expect(externalCombined).not.toContain("scripts/native-bridge-mcp.mjs");
   });
+
+  it("keeps the Claude and Codex using-bridge skill mirrors byte-identical", () => {
+    const codexSkill = join(repoRoot, ".codex", "skills", "using-bridge");
+    const claudeSkill = join(repoRoot, ".claude", "skills", "using-bridge");
+    const codexFiles = recursiveFileHashes(codexSkill);
+    const claudeFiles = recursiveFileHashes(claudeSkill);
+    expect(codexFiles).toEqual(claudeFiles);
+    expect(codexFiles.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining(["SKILL.md", "agents/openai.yaml", "references/routing-policy.md"]),
+    );
+  });
+
+  it("starts from an external workspace without a local scripts tree and stores state there", async () => {
+    const externalWorkspace = mkdtempSync(join(tmpdir(), "bridge-external-workspace-"));
+    expect(existsSync(join(externalWorkspace, "scripts"))).toBe(false);
+    const harness = new NativeHarness("codex", "allow", undefined, undefined, externalWorkspace);
+    try {
+      await harness.initialize();
+      expect((await harness.callTool("bridge_server_info")).data).toEqual({
+        caller: "codex",
+        delegation: "allow",
+      });
+      expect(existsSync(join(externalWorkspace, ".bridge", "bridge.db"))).toBe(true);
+      expect(existsSync(join(externalWorkspace, "scripts", "native-bridge-mcp.mjs"))).toBe(false);
+    } finally {
+      const exit = await harness.shutdown();
+      rmSync(externalWorkspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      expect(exit, `external launcher stderr: ${harness.stderr.join("").slice(-1000)}`).toBe(0);
+    }
+  }, 30_000);
 
   it("shares state across separate stdio processes with pure JSON-RPC stdout", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "bridge-native-launcher-"));

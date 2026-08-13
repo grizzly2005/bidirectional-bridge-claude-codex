@@ -9,6 +9,10 @@ const fixture = resolve(
   process.cwd(),
   "codex/codex-side/test/fixtures/fake-codex-app-server.mjs",
 );
+const currentTimeFixture = resolve(
+  process.cwd(),
+  "codex/codex-side/test/fixtures/fake-codex-app-server-current-time.mjs",
+);
 const clients: CodexAppServerProcessClient[] = [];
 
 const request = (signal: AbortSignal) => ({
@@ -25,6 +29,24 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerProcessClient", () => {
+  it("answers bidirectional currentTime/read requests without hanging the turn", async () => {
+    const client = new CodexAppServerProcessClient({
+      command: process.execPath,
+      args: [currentTimeFixture],
+      now: () => 1_800_000_000_123,
+    });
+    clients.push(client);
+
+    const response = await client.start(request(new AbortController().signal));
+
+    expect(response.content).toContain("current-time request answered");
+    expect(response.telemetry).toMatchObject({
+      runtime: "codex-app-server",
+      total_tokens: 12,
+      turn_count: 1,
+    });
+  });
+
   it("persists the thread before generation and captures correlated numeric usage", async () => {
     let now = 1_800_000_000_000;
     const client = new CodexAppServerProcessClient({
@@ -120,6 +142,20 @@ describe("CodexAppServerProcessClient", () => {
 
     await expect(client.start(request(new AbortController().signal))).rejects.toMatchObject({
       code: ErrorCode.TIMEOUT,
+    });
+  });
+
+  it("reports a failed turn immediately when the runtime emits no usage", async () => {
+    const client = new CodexAppServerProcessClient({
+      command: process.execPath,
+      args: [fixture, "--failed-without-usage"],
+      request_timeout_ms: 2_000,
+    });
+    clients.push(client);
+
+    await expect(client.start(request(new AbortController().signal))).rejects.toMatchObject({
+      code: ErrorCode.ADAPTER_FAILURE,
+      message: "Codex App Server turn failed: fixture credits unavailable",
     });
   });
 

@@ -39,6 +39,58 @@ npm run links:check
 
 Use `npm run links:fix` only when that check reports a broken local workspace link.
 
+## Link the executable for external projects
+
+After the deterministic install and build, expose the local launcher through npm:
+
+```bash
+cd <bridge-repository>
+npm ci
+npm run build
+npm test
+npm link
+claude-codex-bridge --help
+```
+
+`npm link` creates the platform-appropriate command shim (including a Windows `.cmd` shim)
+for the executable declared by the root package. On Unix-like systems the launcher uses its
+committed `#!/usr/bin/env node` shebang and executable bit. Ensure npm's linked binary
+directory is on `PATH`, and keep the linked Bridge checkout available: the command loads
+compiled Bridge packages from that checkout.
+
+The managed workspace is not the Bridge installation directory. With no `--workspace`, the
+launcher uses its process current working directory; an explicit relative `--workspace` is
+resolved from that directory. The default database is always
+`<workspace>/.bridge/bridge.db`.
+
+For an external Codex project, copy
+[`codex-project-config.toml`](../codex/codex-side/examples/codex-project-config.toml) to
+`<external-project>/.codex/config.toml`. For Claude Code, copy
+[`claude-project-mcp.json`](../claude/claude-side/examples/claude-project-mcp.json) to
+`<external-project>/.mcp.json`. Neither example contains a Bridge checkout path or
+credentials, and the external project does not need a local `scripts/` directory.
+
+From the external project, verify discovery before opening the manager:
+
+```bash
+cd <external-project>
+codex mcp list
+codex
+```
+
+or:
+
+```bash
+cd <external-project>
+claude mcp list
+claude
+```
+
+Only the manager native client is opened. It spawns the MCP server automatically; the Bridge
+then spawns the delegated runtime automatically with the external project as its workspace.
+The external project owns `.bridge/` state. Approve project trust only for repositories you
+trust.
+
 ## Project-scoped MCP configuration
 
 The repository contains two portable, credential-free configuration files:
@@ -47,7 +99,8 @@ The repository contains two portable, credential-free configuration files:
 - `.codex/config.toml` for Codex, bound to `caller=codex`.
 
 Both launch `scripts/native-bridge-mcp.mjs` over stdio with delegation enabled. They use
-repository-relative paths and do not install a global MCP server.
+repository-relative paths and do not install a global MCP server. External projects instead
+use the locally linked `claude-codex-bridge` command described above.
 
 The repository also carries the same `using-bridge` skill in the native project locations:
 
@@ -55,8 +108,11 @@ The repository also carries the same `using-bridge` skill in the native project 
 - `.codex/skills/using-bridge/` for Codex.
 
 These directories contain only the shared skill, compact contract/failure/tool references,
-and display metadata. They are versioned deliberately; other client-local state remains
-ignored. No global skill installation is required for this checkout.
+the provisional manually maintained routing policy, and display metadata. They are versioned
+deliberately and checked recursively for byte-identical contents; other client-local state
+remains ignored. The routing policy guides task fit but does not establish benchmark
+superiority or permit quota-based routing. No global skill installation is required for this
+checkout.
 
 Review the configuration before approving it. Claude Code and Codex may ask you to trust a
 project-scoped MCP server. Approve only this repository and do not copy or edit private trust

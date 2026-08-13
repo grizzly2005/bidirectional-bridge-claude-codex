@@ -57,14 +57,30 @@ the failure was in the npm wrapper, not in the repository.
 
 ### `bridge` does not appear in `claude mcp list` or `codex mcp list`
 
-1. Run the command from the **repository root**. Both configurations are project-scoped and
-   repository-relative; they intentionally do not register a global MCP server.
-2. Confirm the configuration file exists and is unmodified: `.mcp.json` for Claude Code,
-   `.codex/config.toml` for Codex.
+1. Run the command from the intended **managed project root**. The Bridge checkout's configs
+   use its source launcher; external-project configs use the linked `claude-codex-bridge`
+   command. Neither registers a global MCP server with the clients.
+2. Confirm the project configuration exists and is unmodified: `.mcp.json` for Claude Code,
+   `.codex/config.toml` for Codex. For an external project, also run
+   `claude-codex-bridge --help` to confirm npm's linked binary directory is on `PATH`.
 3. Codex loads `.codex/config.toml` only after the project is trusted. Claude Code prompts for
    approval of a project-scoped MCP server; inside the client, `/mcp` shows current
    connections and lets you approve `bridge`.
 4. Do not hand-edit client trust state to work around a missing prompt.
+
+If a linked command starts but imports fail, rebuild the Bridge checkout with `npm run build`
+and confirm the checkout still exists at the location registered by `npm link`. The external
+project intentionally has no Bridge `scripts/` tree. Its `.bridge/bridge.db` should appear in
+the external project, not in the Bridge installation directory.
+
+A delegated Codex App Server runs in the same project but receives a thread-local override
+that disables `mcp_servers.bridge`. Without that guard, the worker can try to start the
+manager's required Bridge server recursively and fail before its first turn. This override
+does not disable unrelated project MCP servers or the manager's native Bridge connection.
+
+If Codex rejects a turn before emitting token usage (for example, because the authenticated
+workspace has no credits), the Bridge reports that runtime failure immediately. It does not
+wait for the task deadline or fabricate zero-token telemetry.
 
 On Windows without a global Codex on `PATH`, use `.\node_modules\.bin\codex.cmd mcp list`.
 

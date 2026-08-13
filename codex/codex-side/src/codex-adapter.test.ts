@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CODEX_SHELL_ENVIRONMENT_FILTERS,
+  DELEGATED_CODEX_MCP_SERVERS,
   CodexAdapter,
 } from "./codex-adapter.js";
 import type {
@@ -222,6 +223,7 @@ describe("CodexAdapter", () => {
     await adapter.invoke(invocation(), context().ctx);
 
     expect(client.starts[0]?.config).toEqual({
+      mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
       shell_environment_policy: {
         inherit: "core",
         ignore_default_excludes: false,
@@ -241,6 +243,7 @@ describe("CodexAdapter", () => {
     await adapter.invoke(invocation(), context().ctx);
 
     expect(client.starts[0]?.config).toEqual({
+      mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
       shell_environment_policy: {
         inherit: "core",
         ignore_default_excludes: false,

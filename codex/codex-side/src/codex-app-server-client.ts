@@ -36,6 +36,8 @@ interface JsonRpcResponse {
   readonly error?: { readonly code?: unknown; readonly message?: unknown };
 }
 
+type JsonRpcRequestId = number | string;
+
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
@@ -426,6 +428,25 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
     const completed = this.completedByTurn.get(turnId);
     const usage = this.usageByTurn.get(turnId);
     if (
+      waiter !== undefined &&
+      completed !== undefined &&
+      completed.threadId === waiter.threadId &&
+      completed.turn.status !== "completed"
+    ) {
+      const detail =
+        typeof completed.turn.error?.message === "string"
+          ? `: ${completed.turn.error.message.slice(0, 300)}`
+          : "";
+      this.removeTurnWaiter(turnId);
+      waiter.reject(
+        new BridgeError(
+          completed.turn.status === "interrupted" ? ErrorCode.TIMEOUT : ErrorCode.ADAPTER_FAILURE,
+          `Codex App Server turn ${completed.turn.status}${detail}`,
+        ),
+      );
+      return;
+    }
+    if (
       waiter === undefined ||
       completed === undefined ||
       usage === undefined ||
@@ -579,11 +600,78 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
         continue;
       }
       const record = asRecord(message);
-      if (typeof record["id"] === "number") {
+      const method = record["method"];
+      const id = record["id"];
+      if (
+        typeof method === "string" &&
+        (typeof id === "number" || typeof id === "string")
+      ) {
+        this.onServerRequest(id, method);
+      } else if (typeof id === "number") {
         this.onResponse(record as unknown as JsonRpcResponse);
-      } else if (typeof record["method"] === "string") {
-        this.onNotification(record["method"], record["params"]);
+      } else if (typeof method === "string") {
+        this.onNotification(method, record["params"]);
       }
+    }
+  }
+
+  /**
+   * App Server is bidirectional JSON-RPC: some runtime operations are requests, not
+   * notifications. The Bridge has no interactive user channel, so it answers the safe clock
+   * request and fails closed for approvals, elicitation, and dynamic client tools instead of
+   * silently hanging the worker turn.
+   */
+  private onServerRequest(id: JsonRpcRequestId, method: string): void {
+    switch (method) {
+      case "currentTime/read":
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          result: { currentTimeAt: Math.floor(this.options.now() / 1000) },
+        });
+        return;
+      case "item/commandExecution/requestApproval":
+      case "item/fileChange/requestApproval":
+        this.write({ jsonrpc: "2.0", id, result: { decision: "decline" } });
+        return;
+      case "applyPatchApproval":
+      case "execCommandApproval":
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          result: { decision: { denied: { rejection: "non-interactive Bridge worker" } } },
+        });
+        return;
+      case "item/tool/requestUserInput":
+        this.write({ jsonrpc: "2.0", id, result: { answers: {} } });
+        return;
+      case "mcpServer/elicitation/request":
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          result: { action: "decline", content: null, _meta: null },
+        });
+        return;
+      case "item/permissions/requestApproval":
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          result: { permissions: {}, scope: "turn", strictAutoReview: true },
+        });
+        return;
+      case "item/tool/call":
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          result: { contentItems: [], success: false },
+        });
+        return;
+      default:
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32601, message: `unsupported App Server request: ${method}` },
+        });
     }
   }
 

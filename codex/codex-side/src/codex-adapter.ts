@@ -175,6 +175,18 @@ export const CODEX_SHELL_ENVIRONMENT_FILTERS: Readonly<
   WINDIR: "include",
 });
 
+/**
+ * A delegated Codex worker runs inside the manager's project, where project config can define
+ * the Bridge itself as a required MCP server. Starting that server again is both unnecessary
+ * and a recursive-delegation hazard; on Windows it can also fail before the first turn when an
+ * npm command shim is unavailable to the App Server process. Thread config has higher
+ * precedence than project config, so disable only the conventional project-local Bridge entry
+ * for the worker while leaving every unrelated project MCP server untouched.
+ */
+export const DELEGATED_CODEX_MCP_SERVERS = Object.freeze({
+  bridge: Object.freeze({ enabled: false }),
+});
+
 export function buildCodexShellEnvironmentPolicy(
   toolPath: string | undefined,
 ): Record<string, unknown> {
@@ -700,6 +712,7 @@ export class CodexAdapter implements AgentAdapter {
       sandbox: this.sandbox,
       ...(this.model !== undefined ? { model: this.model } : {}),
       config: {
+        mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
         shell_environment_policy: buildCodexShellEnvironmentPolicy(this.toolPath),
       },
       developer_instructions: CODEX_DEVELOPER_INSTRUCTIONS,

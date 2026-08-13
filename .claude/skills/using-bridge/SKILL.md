@@ -1,6 +1,6 @@
 ---
 name: using-bridge
-description: Coordinate Claude Code and Codex through the repository-local bridge MCP. Use when the user explicitly asks to use the bridge, delegate or review bounded work with the other runtime, coordinate non-overlapping agent work, recover a stranded bridge task, or inspect bridge telemetry. Do not use for trivial single-agent work, one-command facts, tightly coupled same-scope edits, ordinary tasks with no coordination benefit, or when the user says not to use the bridge.
+description: Coordinate Claude Code and Codex through the repository-local bridge MCP for substantial multi-file implementation, security or architecture review, nontrivial diagnosis, verification, recovery, and bounded independent review. Use when the user asks for the bridge or another runtime, or when a substantial task has a useful separable child. Keep trivial, one-command, tightly coupled, or explicitly single-agent work local.
 ---
 
 # Use the Bridge
@@ -39,13 +39,38 @@ Do not delegate:
 
 Treat an exact user-requested delegation count as a hard limit.
 
-## Fast path for one bounded child
+## Delegation checkpoint for substantial work
+
+For every substantial request, determine whether one bounded child task would improve
+implementation quality, security, diagnosis, verification, or independent review.
+
+Treat work as substantial when one or more apply:
+
+- multiple files or components change;
+- architecture or design decisions are needed;
+- the task is security-sensitive;
+- diagnosis is nontrivial;
+- multiple independent workstreams exist;
+- an independent final review is valuable;
+- failure would be expensive or difficult to detect.
+
+When a substantial task contains an independently understandable, verifiable,
+non-overlapping subtask, prefer one bounded child instead of keeping the entire request with
+the manager. A second child is allowed by default only for a truly independent scope or a
+separate read-only final review. Do not exceed two children by default, and treat an exact
+user-requested delegation count as a hard limit.
+
+Read `references/routing-policy.md` when making a nontrivial routing decision. Do not rerun
+benchmarks, search for model rankings, route from quota consumption, or delegate merely to
+achieve a usage percentage during ordinary work.
+
+## Fast path for bounded children
 
 1. **Confirm the server once per fresh native session.** Call `bridge_server_info`. Cache the bound `caller` and `delegation` policy. Stop if identity is wrong or delegation is denied.
 2. **Reuse existing state when present.** Do not create a duplicate root if the current interaction already has one.
 3. **Create one manager root when needed.** Use `bridge_create_task`, then `bridge_claim_task`, then move it to `WORKING` with `bridge_set_state`.
 4. **Lease only manager writes.** If the manager will edit files, acquire its own scope with `bridge_acquire_lease`; a read-only root needs no write lease.
-5. **Delegate once.** Call `bridge_delegate` with the root `run_id`, root `task_id` as `parent_task_id`, depth `1`, a bounded task spec, necessary artifact IDs, a realistic deadline, and normally `max_attempts: 0`. Omit caller identity; the server binds it.
+5. **Delegate the selected child.** Call `bridge_delegate` with the root `run_id`, root `task_id` as `parent_task_id`, depth `1`, a bounded task spec, necessary artifact IDs, a realistic deadline, and normally `max_attempts: 0`. A second child needs the checkpoint justification above. Omit caller identity; the server binds it.
 6. **Let the orchestrator manage the child.** Do not manually create, claim, lease, finalize, or save handles for the child.
 7. **Consume the structured result.** Check that it answers the actual user request. Preserve `PARTIAL` or `FAILED` honestly.
 8. **Verify proportionately as manager.** Use real evidence appropriate to the task. Do not treat the worker’s claim as sufficient by itself.
@@ -95,10 +120,13 @@ The server enforces core invariants, but shell access is not an OS-level scope s
 - Use one bounded request and one structured answer.
 - Never substitute a direct Claude or Codex invocation for `bridge_delegate`.
 - Never delegate to an agent already in the active ancestor chain.
+- A delegated worker must not delegate recursively unless its explicit bounded contract permits
+  that safe action.
 - Do not create a sibling replacement because a child is slow, blocked, quota-limited, or interrupted.
 - Do not redo a delegated task while it is active.
 - Decompose broad repository-wide work into bounded subtasks when possible instead of relying on an extreme turn budget.
-- Do not exceed the user’s requested delegation count or the bridge depth limit.
+- Do not exceed two children by default, the user’s requested delegation count, or the bridge
+  depth limit.
 
 ## Handle results honestly
 

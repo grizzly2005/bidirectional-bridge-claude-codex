@@ -15,8 +15,25 @@ If the identity is wrong, stop. Caller identity is bound when the server starts 
 be overridden through tool arguments.
 
 The project-local `using-bridge` skill is available to both clients. Invoke it explicitly for
-bounded delegation, independent review, recovery, or telemetry work. It should not be used
-for a trivial fact, a tiny local edit, overlapping writes, or merely to involve both models.
+bounded delegation, independent review, recovery, or telemetry work; it may also be selected
+implicitly for substantial multi-file, security, architecture, diagnosis, implementation, or
+verification work. Its delegation checkpoint normally chooses one useful bounded child and
+allows a second only for an independent scope or separate read-only review. It should not be
+used for a trivial fact, a tiny local edit, overlapping writes, or merely to involve both
+models.
+
+Its mirrored `references/routing-policy.md` is provisional, manually maintained guidance.
+Route by task fit, never by quota consumption. Ordinary work does not run comparative
+benchmarks or search for model rankings, and the policy is not evidence of model superiority.
+
+The same manager flow works from an external repository configured with the linked
+`claude-codex-bridge` executable. Start only the manager client from the external project.
+The MCP server and delegated worker start automatically, and both coordination state and
+worker filesystem access use that external project. The Bridge implementation remains in its
+linked checkout; the external project does not need a copy of the Bridge `scripts/` tree.
+For a delegated Codex worker, the Bridge disables only the worker thread's project MCP entry
+named `bridge`; this avoids recursively starting the manager connection while leaving other
+project MCP servers available.
 
 ## Normal manager workflow
 
@@ -36,7 +53,10 @@ unavailable, report that failure without creating replacement child tasks.
 
 When a child returns `PARTIAL`, consume its evidence and blocker without upgrading it to
 success or creating a sibling replacement. Recovery keeps the same durable task and runtime
-session when that task is eligible and its owner can resume it.
+session. An owner uses `bridge_resume_task`; a manager uses
+`bridge_resume_delegated_task` only for the direct child it delegated. In the latter case the
+worker remains owner and execution identity for the adapter, lease, deliverable, telemetry,
+and persisted session.
 
 ## Claude worker profile and turn budget
 

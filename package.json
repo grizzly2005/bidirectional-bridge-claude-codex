@@ -13,6 +13,9 @@
   },
   "homepage": "https://github.com/grizzly2005/bidirectional-bridge-claude-codex#readme",
   "type": "module",
+  "bin": {
+    "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs"
+  },
   "engines": { "node": ">=22.13.0" },
   "workspaces": [
     "shared/*",

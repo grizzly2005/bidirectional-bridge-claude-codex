@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 
 const omitUsage = process.argv.includes("--omit-usage");
 const multiUsage = process.argv.includes("--multi-usage");
+const failedWithoutUsage = process.argv.includes("--failed-without-usage");
 let threadCounter = 0;
 let turnCounter = 0;
 const cumulative = new Map();
@@ -78,6 +79,25 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: message.id,
       result: { turn: { id: turnId, items: [], status: "inProgress" } },
     });
+    if (failedWithoutUsage) {
+      send({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId,
+          turn: {
+            id: turnId,
+            status: "failed",
+            startedAt: 1700000000,
+            completedAt: 1700000001,
+            durationMs: 10,
+            error: { message: "fixture credits unavailable" },
+            items: [],
+          },
+        },
+      });
+      return;
+    }
     send({
       jsonrpc: "2.0",
       method: "item/agentMessage/delta",

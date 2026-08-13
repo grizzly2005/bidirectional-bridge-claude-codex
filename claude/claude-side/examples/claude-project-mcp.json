@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "bridge": {
+      "type": "stdio",
+      "command": "claude-codex-bridge",
+      "args": [
+        "--caller",
+        "claude",
+        "--delegation",
+        "allow",
+        "--workspace",
+        "${CLAUDE_PROJECT_DIR:-.}"
+      ],
+      "env": {}
+    }
+  }
+}

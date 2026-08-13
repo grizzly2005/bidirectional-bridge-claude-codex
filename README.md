@@ -22,6 +22,7 @@ automatically, or merge code for you.
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Project-scoped MCP configuration](#project-scoped-mcp-configuration)
+- [Use from an external repository](#use-from-an-external-repository)
 - [The `using-bridge` skill](#the-using-bridge-skill)
 - [Bounded delegation](#bounded-delegation)
 - [Ownership and leases](#ownership-and-leases)
@@ -188,7 +189,7 @@ Neither creates a global MCP registration.
 ```toml
 [mcp_servers.bridge]
 command = "node"
-args = ["scripts/native-bridge-mcp.mjs", "--caller", "codex", "--delegation", "allow"]
+args = ["scripts/native-bridge-mcp.mjs", "--caller", "codex", "--delegation", "allow", "--workspace", "."]
 cwd = "."
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
@@ -201,6 +202,52 @@ server-side.
 
 Review both files before granting project trust, and never hand-edit client trust state.
 
+## Use from an external repository
+
+The Bridge installation and the managed project are separate. Build and locally link the
+Bridge checkout once:
+
+```bash
+cd <bridge-repository>
+npm ci
+npm run build
+npm test
+npm link
+```
+
+This exposes `claude-codex-bridge` through npm's linked binary directory. Keep the linked
+Bridge checkout available and ensure that directory is on `PATH`. The executable loads the
+compiled implementation from the Bridge checkout, while its default workspace is the process
+current working directory.
+
+```text
+Bridge checkout/install
+        |
+        `-- provides claude-codex-bridge
+                         |
+external repository ----'
+        |
+        `-- owns workspace and .bridge/bridge.db
+```
+
+Copy the portable Codex example from
+[`codex/codex-side/examples/codex-project-config.toml`](codex/codex-side/examples/codex-project-config.toml)
+to `<external-project>/.codex/config.toml`, or the Claude Code example from
+[`claude/claude-side/examples/claude-project-mcp.json`](claude/claude-side/examples/claude-project-mcp.json)
+to `<external-project>/.mcp.json`. The external project does not need the Bridge source tree
+or `scripts/native-bridge-mcp.mjs`.
+
+Open only the manager client from the trusted external project. Its project MCP configuration
+spawns the Bridge server, and the Bridge automatically starts the delegated runtime in that
+same external workspace. Verify discovery with `codex mcp list` or `claude mcp list` before
+starting the client. Project trust grants powerful local runtimes access, so use this only in
+repositories you trust.
+
+When Codex is the delegated worker, its App Server thread explicitly disables the project MCP
+entry named `bridge`. This prevents the worker from recursively starting the manager's Bridge
+configuration while preserving unrelated project MCP servers. The manager's own native MCP
+connection is unchanged.
+
 ## The `using-bridge` skill
 
 The same bounded-coordination skill is committed for both native clients:
@@ -208,11 +255,18 @@ The same bounded-coordination skill is committed for both native clients:
 - Claude Code: [`.claude/skills/using-bridge/SKILL.md`](.claude/skills/using-bridge/SKILL.md)
 - Codex: [`.codex/skills/using-bridge/SKILL.md`](.codex/skills/using-bridge/SKILL.md)
 
-Open a client from this repository and ask it to **use the `using-bridge` skill** when a
-bounded delegation, independent review, recovery, or telemetry lookup is genuinely useful. The
-skill keeps the current client responsible for the user's request, defaults to one child with
-zero retries, and explicitly does not treat "use both models" as a reason to delegate. Only
-these shared skill files are versioned; other client-local state stays ignored.
+Open a client from this repository and ask it to **use the `using-bridge` skill** for bounded
+delegation, independent review, recovery, or telemetry work. The skill may also be selected
+implicitly for substantial multi-file, security, architecture, diagnosis, implementation, or
+verification work. It keeps the current client responsible for the user's request, normally
+uses one useful bounded child, and allows a second only for a genuinely independent scope or a
+separate read-only review. Trivial and tightly coupled work stays local.
+
+The mirrored [routing policy](.codex/skills/using-bridge/references/routing-policy.md) is
+provisional and manually maintained. It guides task fit without claiming model superiority;
+ordinary work must not run comparative benchmarks, search model rankings, or route from quota
+consumption merely to involve both models. Only these shared skill files are versioned; other
+client-local state stays ignored.
 
 ## Bounded delegation
 

@@ -1,6 +1,6 @@
 interface:
   display_name: "Using Bridge"
   short_description: "Coordinate bounded work between Claude Code and Codex"
-  default_prompt: "Use the repository bridge only when bounded delegation, recovery, or telemetry is materially useful."
+  default_prompt: "For substantial work, evaluate one bounded delegation using the manually maintained routing policy; keep trivial work local."
 policy:
   allow_implicit_invocation: true
