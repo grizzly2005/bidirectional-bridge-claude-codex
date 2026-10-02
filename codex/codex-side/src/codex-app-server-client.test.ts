@@ -29,6 +29,36 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerProcessClient", () => {
+  it("does not let one caller abort another caller's shared model-catalog preflight", async () => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, "--slow-catalog"] });
+    clients.push(client); await client.probe();
+    const first = new AbortController();
+    const cancelled = client.start(request(first.signal)).catch(error => error);
+    const independent = client.start(request(new AbortController().signal));
+    const observed = independent.catch(error => error);
+    await new Promise(resolve => setTimeout(resolve, 35)); first.abort();
+    expect((await cancelled).details?.runtime_stop_confirmed).toBe(true);
+    expect(await observed).toMatchObject({ thread_id: "thread_app_1", telemetry: { model: "gpt-fixture" } });
+  });
+  it("uses the runtime catalog default when an implicit desktop model is unavailable", async () => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture] });
+    clients.push(client);
+    const result = await client.start(request(new AbortController().signal));
+    expect(result.telemetry?.model).toBe("gpt-fixture");
+  });
+
+  it("rejects an explicit unavailable model before any worker thread is created", async () => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture] });
+    clients.push(client);
+    let handles = 0;
+    const lifecycle: string[] = [];
+    await expect(client.start({ ...request(new AbortController().signal), model: "unavailable-explicit",
+      on_execution_handle: async () => { handles++; }, on_runtime_state: async state => { lifecycle.push(state); } }))
+      .rejects.toMatchObject({ code: "RUNTIME_PROFILE_MISMATCH", details: { runtime_stop_confirmed: true,
+        runtime_failure: { category: "profile", retryable: false } } });
+    expect(handles).toBe(0);
+    expect(lifecycle).toEqual(["stopped"]);
+  });
   it("answers bidirectional currentTime/read requests without hanging the turn", async () => {
     const client = new CodexAppServerProcessClient({
       command: process.execPath,
@@ -132,7 +162,7 @@ describe("CodexAppServerProcessClient", () => {
     });
   });
 
-  it("fails closed when the final per-thread usage notification is absent", async () => {
+  it("preserves a completed result with unknown usage in operational mode", async () => {
     const client = new CodexAppServerProcessClient({
       command: process.execPath,
       args: [fixture, "--omit-usage"],
@@ -140,9 +170,19 @@ describe("CodexAppServerProcessClient", () => {
     });
     clients.push(client);
 
-    await expect(client.start(request(new AbortController().signal))).rejects.toMatchObject({
-      code: ErrorCode.TIMEOUT,
+    const result = await client.start(request(new AbortController().signal));
+    expect(result.content).toContain("fixture complete");
+    expect(result.telemetry?.total_tokens).toBeNull();
+    expect(result.telemetry?.input_tokens).toBeNull();
+  });
+
+  it("enforces explicit strict metrics without calling a completed turn a runtime timeout", async () => {
+    const client = new CodexAppServerProcessClient({
+      command: process.execPath, args: [fixture, "--omit-usage"], request_timeout_ms: 100,
     });
+    clients.push(client);
+    await expect(client.start({ ...request(new AbortController().signal), telemetry_mode: "strict" }))
+      .rejects.toMatchObject({ code: "TELEMETRY_INCOMPLETE", details: { runtime_stop_confirmed: true } });
   });
 
   it("reports a failed turn immediately when the runtime emits no usage", async () => {

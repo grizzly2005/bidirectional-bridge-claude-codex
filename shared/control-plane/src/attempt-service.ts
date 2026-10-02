@@ -25,11 +25,13 @@ import {
   type AgentId,
   type AttemptTelemetry,
   type AttemptTelemetryUpdate,
+  type ObservationStatus,
   type TaskAttempt,
   type TaskId,
 } from "@bridge/protocol";
 import type { Clock } from "./clock.js";
-import type { AttemptTelemetryQuery, StateStore } from "./store/state-store.js";
+import type { AttemptObservation, AttemptTelemetryQuery, StateStore } from "./store/state-store.js";
+import { hashRequest } from "./idempotency.js";
 
 /**
  * Patterns that indicate a caller is about to persist a credential rather than a pointer.
@@ -57,6 +59,9 @@ export interface NormalizeAttemptTelemetryInput {
   readonly resumed_from_attempt?: number | null;
   readonly agent: AgentId;
   readonly orchestration_started_at: number;
+  readonly attempt_started_at?: number | null;
+  readonly queued_at?: number | null;
+  readonly admitted_at?: number | null;
   readonly observed_runtime_started_at: number | null;
   readonly observed_runtime_ended_at: number | null;
   readonly completed_at: number;
@@ -101,7 +106,23 @@ export function normalizeAttemptTelemetry(
     runtime_ended_at: update.runtime_ended_at ?? input.observed_runtime_ended_at,
     completed_at: input.completed_at,
     wall_duration_ms: Math.max(0, input.completed_at - input.orchestration_started_at),
+    attempt_started_at: input.attempt_started_at ?? null,
+    attempt_wall_duration_ms: input.attempt_started_at != null && input.completed_at >= input.attempt_started_at
+      ? input.completed_at - input.attempt_started_at : null,
+    duration_measurement_version: 2,
+    delegation_elapsed_ms: span(input.orchestration_started_at, input.completed_at),
+    queue_duration_ms: update.queue_duration_ms ?? span(input.queued_at, input.admitted_at),
+    startup_duration_ms: update.startup_duration_ms ?? span(input.observed_runtime_started_at, update.runtime_started_at),
+    work_duration_ms: update.work_duration_ms ?? span(update.runtime_started_at, update.runtime_ended_at),
+    seal_duration_ms: null,
     runtime_duration_ms: update.runtime_duration_ms ?? null,
+    runtime_duration_source: update.runtime_duration_source ?? null,
+    runtime_failure: update.runtime_failure ? {
+      category: update.runtime_failure.category,
+      source: update.runtime_failure.source,
+      retryable: update.runtime_failure.retryable,
+      retry_after_at: update.runtime_failure.retry_after_at,
+    } : null,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cached_input_tokens: update.cached_input_tokens ?? null,
@@ -355,6 +376,69 @@ export class AttemptService {
     return this.store.listAttemptTelemetry(query);
   }
 
+  /** Validate the allowlisted draft before any durable write. Never persist rejected values. */
+  prepareObservation(telemetry: AttemptTelemetry, strict_required: boolean): AttemptObservation {
+    let category: AttemptObservation["category"] = null;
+    try {
+      this.assertSafeTelemetry(telemetry);
+    } catch { category = "PRIVACY"; }
+    if (category === null) {
+      try { assertValid(telemetry, AttemptTelemetrySchema, "AttemptTelemetry"); }
+      catch { category = "SCHEMA"; }
+    }
+    return { task_id: telemetry.task_id, attempt: telemetry.attempt,
+      status: category ? "REJECTED" : "PENDING", category, strict_required,
+      accepted: !strict_required, telemetry: category ? null : telemetry, updated_at: this.clock.now() };
+  }
+
+  /** Only the persisted validated draft can be sealed or repaired; no model is invoked. */
+  sealObservation(task_id: TaskId, attempt: number): ObservationStatus {
+    return this.store.transaction(() => {
+      const draft = this.store.getObservation(task_id, attempt);
+      if (!draft) throw new BridgeError(ErrorCode.NOT_FOUND, "No durable observation draft");
+      if (draft.status === "REJECTED" || draft.telemetry === null) return observationStatus(draft);
+      if (draft.status === "COMPLETE" || draft.category === "USAGE_UNAVAILABLE") return observationStatus(draft);
+      const sealStartedAt = this.clock.now();
+      try {
+        this.store.transaction(() => {
+          const existing = this.queryTelemetry({ task_id, attempt, limit: 1 })[0];
+          if (existing && hashRequest(existing) !== hashRequest(draft.telemetry)) {
+            throw new BridgeError(ErrorCode.IDEMPOTENCY_MISMATCH, "Sealed observation differs from its draft");
+          }
+          if (!existing) this.recordTelemetry(draft.telemetry!);
+        });
+        const unknown = draft.telemetry.input_tokens === null || draft.telemetry.output_tokens === null
+          || draft.telemetry.total_tokens === null;
+        const sealedAt = this.clock.now();
+        const next: AttemptObservation = { ...draft, status: unknown ? "INCOMPLETE" : "COMPLETE",
+          category: unknown ? "USAGE_UNAVAILABLE" : null, accepted: !draft.strict_required || !unknown,
+          seal_started_at: sealStartedAt, sealed_at: sealedAt,
+          seal_duration_ms: span(sealStartedAt, sealedAt), seal_measurement_version: 1,
+          updated_at: sealedAt };
+        this.store.putObservation(next);
+        return observationStatus(next);
+      } catch (error) {
+        const mismatch = error instanceof BridgeError && error.code === ErrorCode.IDEMPOTENCY_MISMATCH;
+        const sealedAt = this.clock.now();
+        const next: AttemptObservation = { ...draft, status: mismatch ? "REJECTED" : "INCOMPLETE", category: mismatch ? "SCHEMA" : "STORAGE",
+          accepted: !draft.strict_required, updated_at: sealedAt,
+          seal_started_at: sealStartedAt, sealed_at: sealedAt,
+          seal_duration_ms: span(sealStartedAt, sealedAt), seal_measurement_version: 1 };
+        this.store.putObservation(next);
+        this.store.appendEvent({ type: EventType.OBSERVATION_INCOMPLETE, task_id, agent: draft.telemetry.agent,
+          payload: { attempt, category: next.category, strict_required: draft.strict_required } }, sealedAt);
+        return observationStatus(next);
+      }
+    });
+  }
+
+  observation(task_id: TaskId, attempt: number): ObservationStatus {
+    const record = this.store.getObservation(task_id, attempt);
+    return record ? observationStatus(record) : {
+      status: "LEGACY_UNKNOWN", category: null, accepted: false, strict_required: false,
+    };
+  }
+
   /**
    * The most recent non-null handle before `attempt`, for resuming after a crash.
    * Searches backwards so attempt N resumes from N-1 rather than from the first try.
@@ -414,4 +498,17 @@ export class AttemptService {
       }
     }
   }
+}
+
+function span(start: number | null | undefined, end: number | null | undefined): number | null {
+  return start != null && end != null && end >= start ? end - start : null;
+}
+
+function observationStatus(record: AttemptObservation): ObservationStatus {
+  return { status: record.status, category: record.category, accepted: record.accepted,
+    strict_required: record.strict_required,
+    ...(record.seal_measurement_version !== undefined ? {
+      seal_started_at: record.seal_started_at, sealed_at: record.sealed_at,
+      seal_duration_ms: record.seal_duration_ms, seal_measurement_version: record.seal_measurement_version,
+    } : {}) };
 }

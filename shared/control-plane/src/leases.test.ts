@@ -82,10 +82,50 @@ describe("acquisition", () => {
     ).not.toThrow();
   });
 
+  it("refuses overlapping scopes for distinct tasks of the same holder", () => {
+    const first = task(["shared/**"]);
+    const second = task(["shared/protocol/**"]);
+    cp.leases.acquire({ task_id: first, holder: "codex", scope: { paths: ["shared/**"] }, ttl_ms: TTL });
+    let error: any;
+    try {
+      cp.leases.acquire({ task_id: second, holder: "codex", scope: { paths: ["shared/protocol/**"] }, ttl_ms: TTL });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error?.code).toBe(ErrorCode.SCOPE_CONFLICT);
+    expect(error?.details.conflicts[0]).toMatchObject({ task_id: first, holder: "codex" });
+    expect(cp.leases.listLive()).toHaveLength(1);
+    expect(cp.events({ types: ["lease.denied"] })).toHaveLength(1);
+  });
+
+  it("allows disjoint scopes for distinct tasks of the same holder", () => {
+    cp.leases.acquire({ task_id: task(["a/**"]), holder: "codex", scope: { paths: ["a/**"] }, ttl_ms: TTL });
+    cp.leases.acquire({ task_id: task(["b/**"]), holder: "codex", scope: { paths: ["b/**"] }, ttl_ms: TTL });
+    expect(cp.leases.listLive()).toHaveLength(2);
+  });
+
   it("rejects a non-positive ttl", () => {
     expect(() =>
       cp.leases.acquire({ task_id: task(["a/**"]), holder: "claude", scope: { paths: ["a/**"] }, ttl_ms: 0 }),
     ).toThrow(/positive/);
+  });
+
+  it("does not reacquire a quarantined scope under the same task and holder", () => {
+    const t = task(["shared/**"]);
+    const lease = cp.leases.acquire({ task_id: t, holder: "claude", scope: { paths: ["shared/**"] }, ttl_ms: TTL });
+    cp.leases.quarantine(lease.lease_id, "claude");
+    expect(() => cp.leases.acquire({ task_id: t, holder: "claude", scope: { paths: ["shared/a.ts"] }, ttl_ms: TTL }))
+      .toThrow(/conflict/);
+    expect(cp.leases.listLive()).toHaveLength(1);
+  });
+
+  it("rejects a preexisting subdivision while its overlapping parent scope is quarantined", () => {
+    const t = task(["shared/**"]);
+    const first = cp.leases.acquire({ task_id: t, holder: "claude", scope: { paths: ["shared/**"] }, ttl_ms: TTL });
+    const second = cp.leases.acquire({ task_id: t, holder: "claude", scope: { paths: ["shared/a.ts"] }, ttl_ms: TTL });
+    cp.leases.quarantine(first.lease_id, "claude");
+    expect(() => cp.leases.assertWritable(second.lease_id, "claude", "shared/a.ts"))
+      .toThrow(/quarantin/i);
   });
 });
 

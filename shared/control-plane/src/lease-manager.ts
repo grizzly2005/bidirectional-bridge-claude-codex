@@ -4,10 +4,9 @@
  * Two agents editing the same files is the failure this bridge exists to prevent, so a
  * lease is required before any write and is checked against every other *live* lease.
  *
- * Why time-bounded leases rather than locks (D-004): a crashed agent holding a lock would
- * deadlock the system with no operator present. A lease simply stops being live, and the
- * scope becomes acquirable again. Expiry is evaluated lazily against the injected clock —
- * no background timer — which keeps behaviour deterministic under test.
+ * Expiry frees only scopes without a possibly live execution. An interrupted runtime
+ * with no positive stop evidence keeps its scope quarantined, even past the lease TTL.
+ * Expiry is evaluated lazily against the injected clock.
  */
 
 import {
@@ -49,16 +48,19 @@ export class LeaseManager {
     private readonly rng?: RandomSource,
   ) {}
 
-  /** A lease is live if it is HELD and has not passed its expiry. */
+  /** Quarantine and unconfirmed executions keep the scope live beyond its TTL. */
   isLive(lease: Lease, now = this.clock.now()): boolean {
-    return lease.state === LeaseState.HELD && lease.expires_at > now;
+    if (lease.state === LeaseState.QUARANTINED) return true;
+    if (lease.state !== LeaseState.HELD) return false;
+    const execution = this.store.getExecution(lease.task_id);
+    return lease.expires_at > now || (execution?.lease_id === lease.lease_id && execution.runtime_stop_confirmed !== true);
   }
 
   /**
    * Acquire a lease over `scope`, or throw SCOPE_CONFLICT listing who holds the overlap.
    *
-   * Same-holder overlap is allowed: an agent extending or subdividing its own scope is
-   * not a conflict, and refusing it would force agents to release-then-reacquire, opening
+   * Overlap is allowed only for the same holder AND task: extending its own scope is
+   * not a conflict, and refusing it would force a task to release-then-reacquire, opening
    * a window for the other agent to steal the scope mid-task.
    */
   acquire(input: AcquireLeaseInput): Lease {
@@ -75,7 +77,7 @@ export class LeaseManager {
     // must be *recorded*. Logging it inside the transaction that then throws would roll
     // the event back with everything else, and denials — near-collisions between the two
     // agents — are exactly what a supervisor needs to see.
-    const conflicts = this.findConflicts(scope, input.holder, now);
+    const conflicts = this.findConflicts(scope, input.holder, now, input.task_id);
     if (conflicts.length > 0) {
       this.store.transaction(() => {
         this.store.appendEvent(
@@ -99,7 +101,7 @@ export class LeaseManager {
     return this.store.transaction(() => {
       // Re-check inside the transaction: another agent may have acquired an overlapping
       // scope between the check above and the write below.
-      const raced = this.findConflicts(scope, input.holder, this.clock.now());
+      const raced = this.findConflicts(scope, input.holder, this.clock.now(), input.task_id);
       if (raced.length > 0) {
         throw new BridgeError(
           ErrorCode.SCOPE_CONFLICT,
@@ -131,12 +133,20 @@ export class LeaseManager {
     });
   }
 
-  /** Conflicts against currently-live leases held by a different agent. */
-  findConflicts(scope: WriteScope, holder: AgentId, now = this.clock.now()): LeaseConflict[] {
+  /** Without a task identity, report all live overlaps, including the caller's tasks. */
+  findConflicts(
+    scope: WriteScope,
+    holder: AgentId,
+    now = this.clock.now(),
+    task_id?: TaskId,
+  ): LeaseConflict[] {
     const out: LeaseConflict[] = [];
     for (const held of this.store.listHeldLeases()) {
       if (!this.isLive(held, now)) continue;
-      if (held.holder === holder) continue;
+      const execution = this.store.getExecution(held.task_id);
+      // A second lease cannot bypass an execution fence under the same task identity.
+      if (held.holder === holder && held.task_id === task_id && held.state === LeaseState.HELD &&
+          (execution === undefined || execution.runtime_stop_confirmed === true)) continue;
       const overlapping = conflictingPairs(scope, held.scope);
       if (overlapping.length > 0) {
         out.push({
@@ -157,7 +167,7 @@ export class LeaseManager {
       throw new BridgeError(ErrorCode.NOT_FOUND, `no such lease ${lease_id}`, { lease_id });
     }
     const now = this.clock.now();
-    if (!this.isLive(lease, now)) {
+    if (lease.state !== LeaseState.HELD || lease.expires_at <= now) {
       throw new BridgeError(
         ErrorCode.LEASE_INVALID,
         `lease ${lease_id} is ${lease.state === LeaseState.HELD ? "expired" : lease.state.toLowerCase()}`,
@@ -170,6 +180,11 @@ export class LeaseManager {
         holder: lease.holder,
         caller: holder,
       });
+    }
+    if (this.store.listHeldLeases().some((held) => held.lease_id !== lease_id &&
+        held.state === LeaseState.QUARANTINED && scopeAllows(held.scope, path))) {
+      throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+        "Path remains quarantined until the previous runtime stop is confirmed");
     }
     if (!scopeAllows(lease.scope, path)) {
       throw new BridgeError(
@@ -189,7 +204,7 @@ export class LeaseManager {
         throw new BridgeError(ErrorCode.NOT_OWNER, `lease ${lease_id} is held by ${lease.holder}`);
       }
       const now = this.clock.now();
-      if (!this.isLive(lease, now)) {
+      if (lease.state !== LeaseState.HELD || lease.expires_at <= now) {
         throw new BridgeError(
           ErrorCode.LEASE_INVALID,
           `cannot renew a lease that is no longer live; re-acquire instead`,
@@ -208,6 +223,10 @@ export class LeaseManager {
       if (!lease) throw new BridgeError(ErrorCode.NOT_FOUND, `no such lease ${lease_id}`);
       if (lease.holder !== holder) {
         throw new BridgeError(ErrorCode.NOT_OWNER, `lease ${lease_id} is held by ${lease.holder}`);
+      }
+      const execution = this.store.getExecution(lease.task_id);
+      if (lease.state === LeaseState.QUARANTINED || (lease.state === LeaseState.HELD && execution?.lease_id === lease_id && execution.runtime_stop_confirmed !== true)) {
+        throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "Cannot release a scope without runtime stop evidence");
       }
       const now = this.clock.now();
       // Releasing an already-released lease is a no-op, not an error: release is on the
@@ -238,7 +257,13 @@ export class LeaseManager {
       const now = this.clock.now();
       const reaped: Lease[] = [];
       for (const lease of this.store.listHeldLeases()) {
+        if (lease.state === LeaseState.QUARANTINED) continue;
         if (lease.expires_at > now) continue;
+        const execution = this.store.getExecution(lease.task_id);
+        if (execution?.lease_id === lease.lease_id && execution.runtime_stop_confirmed !== true) {
+          this.quarantine(lease.lease_id, lease.holder);
+          continue;
+        }
         const expired: Lease = { ...lease, state: LeaseState.EXPIRED };
         this.store.updateLease(expired);
         this.store.appendEvent(
@@ -259,5 +284,34 @@ export class LeaseManager {
   listLive(): Lease[] {
     const now = this.clock.now();
     return this.store.listHeldLeases().filter((l) => this.isLive(l, now));
+  }
+
+  quarantine(lease_id: LeaseId, holder: AgentId): Lease {
+    return this.store.transaction(() => {
+      const lease = this.store.getLease(lease_id);
+      if (!lease) throw new BridgeError(ErrorCode.NOT_FOUND, "Lease not found");
+      if (lease.holder !== holder) throw new BridgeError(ErrorCode.NOT_OWNER, "Lease belongs to another holder");
+      if (lease.state === LeaseState.QUARANTINED) return lease;
+      if (lease.state !== LeaseState.HELD) throw new BridgeError(ErrorCode.LEASE_INVALID, "Released lease cannot be quarantined");
+      const next = { ...lease, state: LeaseState.QUARANTINED };
+      this.store.updateLease(next);
+      this.store.appendEvent({ type: "lease.quarantined", task_id: lease.task_id, agent: holder,
+        payload: { lease_id, reason: "runtime_stop_unconfirmed" } }, this.clock.now());
+      return next;
+    });
+  }
+
+  confirmStopped(lease_id: LeaseId, holder: AgentId): Lease {
+    return this.store.transaction(() => {
+      const lease = this.store.getLease(lease_id);
+      if (!lease) throw new BridgeError(ErrorCode.NOT_FOUND, "Lease not found");
+      if (lease.holder !== holder) throw new BridgeError(ErrorCode.NOT_OWNER, "Lease belongs to another holder");
+      const execution = this.store.getExecution(lease.task_id);
+      if (execution?.lease_id !== lease_id || execution.runtime_stop_confirmed !== true) {
+        throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "Stop confirmation does not match this execution");
+      }
+      if (lease.state === LeaseState.QUARANTINED) this.store.updateLease({ ...lease, state: LeaseState.HELD });
+      return this.release(lease_id, holder);
+    });
   }
 }

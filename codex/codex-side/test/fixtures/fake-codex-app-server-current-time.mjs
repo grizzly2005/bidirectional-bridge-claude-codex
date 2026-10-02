@@ -54,6 +54,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
 
+  if (message.method === "config/read") {
+    send({ id: message.id, result: { config: { model: "gpt-fixture", model_provider: "openai" } } });
+    return;
+  }
+  if (message.method === "model/list") {
+    send({ id: message.id, result: { data: [{ model: "gpt-fixture", isDefault: true }], nextCursor: null } });
+    return;
+  }
+
   if (message.method === "turn/start") {
     turnId = "turn_current_time_1";
     send({

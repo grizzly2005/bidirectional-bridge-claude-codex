@@ -66,7 +66,12 @@ export function runIdempotent<T>(
   return store.transaction(() => {
     // Re-read inside the transaction: two concurrent replays could both miss above.
     const raced = store.getIdempotency(opts.key!);
-    if (raced) return JSON.parse(raced.response_json) as T;
+    if (raced) {
+      if (raced.operation !== opts.operation || raced.request_hash !== requestHash) {
+        throw new BridgeError(ErrorCode.IDEMPOTENCY_MISMATCH, "Idempotency key won by a different concurrent request");
+      }
+      return JSON.parse(raced.response_json) as T;
+    }
 
     const result = fn();
     store.putIdempotency({

@@ -101,6 +101,9 @@ export async function runNativeBridge(args) {
     throw new Error(`workspace is not a directory: ${args.workspace}`);
   }
 
+  const diagnostics = await import(new URL("../shared/mcp-server-core/dist/diagnostics.js", import.meta.url).href);
+  const startupIdentity = diagnostics.captureBridgeIdentity({ repositoryRoot: nativeBridgeRepositoryRoot,
+    entrypointPath: launcherPath, serverName: "bridge-native-project", serverVersion: "0.1.0" });
   const [core, claudeSide, codexSide] = await Promise.all([
     import(new URL("../shared/mcp-server-core/dist/index.js", import.meta.url).href),
     import(new URL("../claude/claude-side/dist/index.js", import.meta.url).href),
@@ -143,6 +146,7 @@ export async function runNativeBridge(args) {
     delegationPolicy: args.delegation,
     adapters,
     serverName: "bridge-native-project",
+    startupIdentity,
     onWarning: (message) => log(`warning: ${message}`),
   });
 

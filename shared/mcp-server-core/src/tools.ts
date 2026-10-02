@@ -6,8 +6,8 @@
  * swapped (HTTP, in-process) without changing semantics.
  *
  * Two conventions worth knowing:
- *  - every mutating tool takes an optional `idempotency_key`, because an MCP call that
- *    times out leaves the caller unable to tell whether it applied (D-005);
+ *  - replayable mutations expose an `idempotency_key`; targeted cancellation and
+ *    observation repair are idempotent by their durable state (D-005);
  *  - errors come back as structured `BridgeError` JSON inside an `isError` result, so the
  *    calling agent can branch on `code` instead of parsing prose.
  */
@@ -26,6 +26,7 @@ import {
   type VerificationResult,
 } from "@bridge/protocol";
 import type { ControlPlane, Orchestrator } from "@bridge/control-plane";
+import { bridgeDiagnostics, type BridgeProcessIdentity } from "./diagnostics.js";
 
 /* ------------------------------------------------------------------ *
  * Zod shapes (the MCP SDK builds JSON Schema from these)
@@ -56,6 +57,8 @@ const taskSpecShape = z.object({
     .describe("Finite worker turn ceiling; omit for the conservative runtime default."),
   priority: z.number().int().min(0).max(100).optional(),
   tags: z.array(z.string()).optional(),
+  telemetry_mode: z.enum(["operational", "strict"]).optional()
+    .describe("Operational preserves delivered work with unknown metrics; strict requires accepted observation."),
 });
 
 const verificationShape = z.object({
@@ -77,6 +80,7 @@ export interface ToolContext {
   readonly orchestrator: Orchestrator;
   /** Identity bound when the server process starts. Tool arguments cannot override it. */
   readonly defaultAgent: AgentId;
+  readonly startupIdentity?: BridgeProcessIdentity;
   /** Generic server-side delegation policy selected when the process starts. */
   readonly delegationPolicy: DelegationPolicy;
 }
@@ -125,6 +129,13 @@ const who = (args: Record<string, unknown>, ctx: ToolContext): AgentId => {
 };
 
 export const TOOLS: readonly ToolDefinition[] = [
+  {
+    name: "bridge_doctor", title: "Export private-content-free bridge diagnostics",
+    description: "Compare the server startup identity with current source and distribution hashes; export aggregate admission, lease and observation status without prompts or runtime handles.",
+    inputShape: {},
+    handler: (_args, ctx) => bridgeDiagnostics(ctx.cp, { caller: ctx.defaultAgent,
+      delegationPolicy: ctx.delegationPolicy, ...(ctx.startupIdentity ? { identity: ctx.startupIdentity } : {}) }),
+  },
   {
     name: "bridge_server_info",
     title: "Inspect the bound bridge session",
@@ -213,6 +224,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     handler: (args, ctx) => {
       const task_id = args["task_id"] as string;
       const task = ctx.cp.tasks.get(task_id);
+      const latestStatus = ctx.cp.tasks.latestStatus(task_id) ?? null;
       return {
         task,
         dependencies: ctx.cp.tasks.checkDependencies(task_id),
@@ -223,11 +235,17 @@ export const TOOLS: readonly ToolDefinition[] = [
           bytes: a.bytes,
           sha256: a.sha256,
         })),
-        latest_status: ctx.cp.tasks.latestStatus(task_id) ?? null,
+        latest_status: latestStatus,
+        latest_status_is_stale: latestStatus !== null && latestStatus.state !== task.state,
         deliverable: ctx.cp.deliverables.get(task_id) ?? null,
         verifications: ctx.cp.deliverables.listVerifications(task_id),
         attempts: ctx.cp.attempts.list(task_id),
         telemetry: ctx.cp.attempts.queryTelemetry({ task_id }),
+        observation: ctx.cp.attempts.observation(task_id, task.attempt),
+        execution: (() => { const e = ctx.cp.store.getExecution(task_id); return e ? {
+          attempt: e.attempt, phase: e.phase, runtime_stop_confirmed: e.runtime_stop_confirmed,
+          queued_at: e.queued_at, admitted_at: e.admitted_at, cancel_requested_at: e.cancel_requested_at,
+        } : null; })(),
       };
     },
   },
@@ -257,13 +275,24 @@ export const TOOLS: readonly ToolDefinition[] = [
       const task_id = args["task_id"] as string;
       const task = ctx.cp.tasks.get(task_id);
       const attempt = (args["attempt"] as number | undefined) ?? task.attempt;
+      const caller = who(args, ctx);
+      return ctx.cp.store.transaction(() => {
+      const currentTask = ctx.cp.tasks.get(task_id);
+      if (currentTask.owner !== caller) throw new BridgeError(ErrorCode.NOT_OWNER, "Only the task owner can save a runtime handle");
+      if (attempt !== currentTask.attempt) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Handle writes must target the current attempt");
+      const existing = ctx.cp.attempts.get(task_id, attempt);
+      if (existing?.ended_at !== undefined) throw new BridgeError(ErrorCode.ILLEGAL_TRANSITION, "A closed attempt handle cannot be rewritten");
+      const execution = ctx.cp.store.getExecution(task_id);
+      if (execution && execution.phase !== "STOPPED") throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+        "An orchestrated execution owns its fenced handle callback");
       const record = ctx.cp.attempts.saveHandle(
         task_id,
         attempt,
-        who(args, ctx),
+        caller,
         args["execution_handle"] as string,
       );
       return { task_id, attempt: record.attempt, saved: true, updated_at: record.updated_at };
+      });
     },
   },
   {
@@ -272,7 +301,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     description:
       "Fetch the execution handle saved for an attempt, so a restarted agent can reconnect " +
       "to the session it was using instead of starting the task from cold. The handle may be " +
-      "stale; treat a failed resume as a normal cold start.",
+      "stale; strict recovery must preserve the same session and report a failed resume.",
     inputShape: {
       task_id: z.string(),
       attempt: z.number().int().min(0).optional().describe("Defaults to the task's current attempt."),
@@ -280,6 +309,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     handler: (args, ctx) => {
       const task_id = args["task_id"] as string;
       const task = ctx.cp.tasks.get(task_id);
+      if (task.owner !== ctx.defaultAgent) throw new BridgeError(ErrorCode.NOT_OWNER, "Only the task owner can inspect raw runtime handles");
       const attempt = (args["attempt"] as number | undefined) ?? task.attempt;
       const record = ctx.cp.attempts.get(task_id, attempt);
       return {
@@ -354,8 +384,8 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: "Acquire a write-scope lease",
     description:
       "Reserve exclusive write access to a set of path globs before editing files. Fails with " +
-      "SCOPE_CONFLICT (listing the holder) if another agent is writing there. Leases expire, so a " +
-      "crashed agent cannot block the scope forever.",
+      "SCOPE_CONFLICT (listing the holder) if another task owns an overlap. Expired leases " +
+      "remain quarantined when runtime stop has not been confirmed.",
     inputShape: {
       task_id: z.string(),
       scope: writeScopeShape,
@@ -380,13 +410,16 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: "bridge_check_scope",
     title: "Check whether a scope is free",
     description:
-      "Non-mutating conflict check. Use before planning work to see whether the other agent is " +
-      "already writing in the files you need.",
-    inputShape: { scope: writeScopeShape, ...agentArg },
+      "Non-mutating conflict check against every live task. Supply task_id to allow scope " +
+      "subdivision by the same task and caller only without a possibly running or quarantined " +
+      "execution; without it all overlapping leases conflict.",
+    inputShape: { scope: writeScopeShape, task_id: z.string().optional(), ...agentArg },
     handler: (args, ctx) => {
       const conflicts = ctx.cp.leases.findConflicts(
         args["scope"] as { paths: string[] },
         who(args, ctx),
+        ctx.cp.clock.now(),
+        args["task_id"] as string | undefined,
       );
       return { free: conflicts.length === 0, conflicts };
     },
@@ -408,7 +441,7 @@ export const TOOLS: readonly ToolDefinition[] = [
   {
     name: "bridge_release_lease",
     title: "Release a lease",
-    description: "Free a write scope for the other agent. Safe to call twice.",
+    description: "Free a write scope after positive runtime stop evidence. Idempotent when released; quarantined or possibly running scopes cannot be forced free.",
     inputShape: { lease_id: z.string(), ...agentArg },
     handler: (args, ctx) => {
       const lease = ctx.cp.leases.release(args["lease_id"] as string, who(args, ctx));
@@ -428,7 +461,13 @@ export const TOOLS: readonly ToolDefinition[] = [
       ...agentArg,
       ...idemArg,
     },
-    handler: (args, ctx) => {
+    handler: async (args, ctx) => {
+      if (args["to"] === TaskState.CANCELLED) {
+        const caller = who(args, ctx);
+        const owned = ctx.cp.tasks.get(args["task_id"] as string);
+        if (owned.owner !== caller) throw new BridgeError(ErrorCode.NOT_OWNER, "Use bridge_cancel_task for an authorized direct child");
+        return ctx.orchestrator.cancelTask(owned.task_id, caller);
+      }
       const task = ctx.cp.tasks.transition({
         task_id: args["task_id"] as string,
         agent: who(args, ctx),
@@ -438,6 +477,24 @@ export const TOOLS: readonly ToolDefinition[] = [
       });
       return { task_id: task.task_id, state: task.state };
     },
+  },
+  {
+    name: "bridge_cancel_task", title: "Cancel an owned task or direct delegated child",
+    description: "Request a durable cancellation, stop only this invocation and report positive runtime stop evidence. Unconfirmed stops retain their scope in quarantine.",
+    inputShape: { task_id: z.string(), wait_ms: z.number().int().min(0).max(30_000).default(6000), ...agentArg },
+    handler: (args, ctx) => ctx.orchestrator.cancelTask(args["task_id"] as string, who(args, ctx), args["wait_ms"] as number ?? 6000),
+  },
+  {
+    name: "bridge_continue_task", title: "Continue the same task after prelaunch contention",
+    description: "Continue preparation of an owned task or directly delegated child blocked by scope contention before its first runtime attempt. Preserves the original inputs, lineage and total deadline.",
+    inputShape: { task_id: z.string(), idempotency_key: z.string().min(1), ...agentArg },
+    handler: (args, ctx) => ctx.orchestrator.continueTask(args["task_id"] as string, who(args, ctx), args["idempotency_key"] as string),
+  },
+  {
+    name: "bridge_repair_observation", title: "Seal a persisted observation without rerunning work",
+    description: "Repair storage of the validated telemetry draft for an owned task or directly delegated child. This never invokes a runtime or accepts caller-supplied metrics.",
+    inputShape: { task_id: z.string(), attempt: z.number().int().min(0).optional(), ...agentArg },
+    handler: (args, ctx) => ctx.orchestrator.repairObservation(args["task_id"] as string, who(args, ctx), args["attempt"] as number | undefined),
   },
   {
     name: "bridge_report_status",
@@ -627,8 +684,12 @@ export const TOOLS: readonly ToolDefinition[] = [
       to: z.string().describe("Target agent id, e.g. 'codex'."),
       spec: taskSpecShape,
       input_artifacts: z.array(z.string()).default([]),
-      deadline_ms: z.number().int().min(1000).max(86_400_000),
-      max_attempts: z.number().int().min(0).max(5).default(0),
+      deadline_ms: z.number().int().min(1000).max(86_400_000)
+        .describe("Maximum duration per attempt, including each retry."),
+      total_deadline_ms: z.number().int().min(1000).max(86_400_000).optional()
+        .describe("Optional total elapsed-time budget across retries and later recoveries."),
+      max_attempts: z.number().int().min(0).max(5).default(0)
+        .describe("Additional retries: 0 means one total attempt; 1 means at most two."),
       ...lineageArgs,
       ...agentArg,
       ...idemArg,
@@ -654,6 +715,8 @@ export const TOOLS: readonly ToolDefinition[] = [
           : {}),
         input_artifacts: (args["input_artifacts"] as string[]) ?? [],
         deadline_ms: args["deadline_ms"] as number,
+        ...(args["total_deadline_ms"] !== undefined
+          ? { total_deadline_ms: args["total_deadline_ms"] as number } : {}),
         max_attempts: (args["max_attempts"] as number) ?? 0,
         ...(args["idempotency_key"] ? { idempotency_key: args["idempotency_key"] as string } : {}),
       });
@@ -700,19 +763,30 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: "Tail the event log",
     description:
       "Read the append-only event log, optionally after a given event_id. This is the supervisor " +
-      "feed: poll with the last id you saw to stream progress.",
+      "feed: pass next_cursor as after, keeping task_id unchanged. has_more means another page " +
+      "is available. head_event_id is the global head; deprecated last_event_id retains that " +
+      "head meaning and must not be used as a pagination cursor.",
     inputShape: {
       after: z.number().int().min(0).optional(),
       task_id: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(100),
     },
     handler: (args, ctx) => {
-      const events = ctx.cp.events({
+      const limit = (args["limit"] as number | undefined) ?? 100;
+      const page = ctx.cp.events({
         ...(args["after"] !== undefined ? { after: args["after"] as number } : {}),
         ...(args["task_id"] ? { task_id: args["task_id"] as string } : {}),
-        limit: (args["limit"] as number) ?? 100,
+        limit: limit + 1,
       });
-      return { events, last_event_id: ctx.cp.lastEventId() };
+      const events = page.slice(0, limit);
+      const head = ctx.cp.lastEventId();
+      return {
+        events,
+        next_cursor: events.at(-1)?.event_id ?? (args["after"] as number | undefined) ?? 0,
+        has_more: page.length > limit,
+        head_event_id: head,
+        last_event_id: head,
+      };
     },
   },
   {

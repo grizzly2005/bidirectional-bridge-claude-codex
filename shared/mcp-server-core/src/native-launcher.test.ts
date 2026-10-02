@@ -304,12 +304,17 @@ describe("native project MCP launcher", () => {
     expect(externalCombined).not.toContain("scripts/native-bridge-mcp.mjs");
   });
 
-  it("keeps the Claude and Codex using-bridge skill mirrors byte-identical", () => {
+  it("keeps all three using-bridge mirrors identical to the canonical source", () => {
+    const canonical = join(repoRoot, "skills", "using-bridge");
     const codexSkill = join(repoRoot, ".codex", "skills", "using-bridge");
     const claudeSkill = join(repoRoot, ".claude", "skills", "using-bridge");
     const codexFiles = recursiveFileHashes(codexSkill);
     const claudeFiles = recursiveFileHashes(claudeSkill);
+    const canonicalFiles = recursiveFileHashes(canonical);
+    const agentsFiles = recursiveFileHashes(join(repoRoot, ".agents", "skills", "using-bridge"));
     expect(codexFiles).toEqual(claudeFiles);
+    expect(codexFiles).toEqual(canonicalFiles);
+    expect(agentsFiles).toEqual(canonicalFiles);
     expect(codexFiles.map((entry) => entry.path)).toEqual(
       expect.arrayContaining(["SKILL.md", "agents/openai.yaml", "references/routing-policy.md"]),
     );
@@ -325,6 +330,12 @@ describe("native project MCP launcher", () => {
         caller: "codex",
         delegation: "allow",
       });
+      const doctor = (await harness.callTool("bridge_doctor")).data;
+      expect(doctor.identity.capture.pid).toBeGreaterThan(0);
+      expect(doctor.identity.capture.evidence).toBe("startup_disk_snapshot");
+      expect(doctor.identity.changed_since_start.distribution).toBe("same");
+      expect(doctor.identity.restart_required).toBe(false);
+      expect(doctor.probes.model_invoked).toBe(false);
       expect(existsSync(join(externalWorkspace, ".bridge", "bridge.db"))).toBe(true);
       expect(existsSync(join(externalWorkspace, "scripts", "native-bridge-mcp.mjs"))).toBe(false);
     } finally {

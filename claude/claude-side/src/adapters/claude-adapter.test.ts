@@ -99,7 +99,212 @@ const OK_RESULT: ClaudeRunResult = {
   telemetry: TELEMETRY,
 };
 
+describe("bounded admission", () => {
+  it("rejects invalid admission limits", () => {
+    const runner = functionRunner("fn", async () => OK_RESULT);
+    expect(() => new ClaudeAdapter({ runner, max_concurrency: 0 })).toThrow(/concurrency/);
+    expect(() => new ClaudeAdapter({ runner, max_concurrency: 1.5 })).toThrow(/concurrency/);
+    expect(() => new ClaudeAdapter({ runner, max_pending_invocations: -1 })).toThrow(/pending/);
+  });
+
+  it("never starts two runners with max_concurrency 1", async () => {
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const adapter = new ClaudeAdapter({ runner: functionRunner("fn", async () => {
+      peak = Math.max(peak, ++active);
+      entered();
+      await held;
+      active--;
+      return OK_RESULT;
+    }) });
+    const first = adapter.invoke(invocation(), context().ctx);
+    await started;
+    const second = adapter.invoke({ ...invocation(), task_id: "task_bbbbbbbbbb" }, context().ctx);
+    queueMicrotask(release);
+    await Promise.all([first, second]);
+    expect(peak).toBe(1);
+  });
+
+  it("cancels a queued task without interrupting the active runner", async () => {
+    let calls = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const adapter = new ClaudeAdapter({ runner: functionRunner("fn", async () => {
+      calls++;
+      entered();
+      await held;
+      return OK_RESULT;
+    }) });
+    const first = adapter.invoke(invocation(), context().ctx);
+    await started;
+    const secondTask = { ...invocation(), task_id: "task_bbbbbbbbbb" };
+    const second = adapter.invoke(secondTask, context().ctx);
+    try {
+      await Promise.resolve();
+      expect(calls).toBe(1);
+      await adapter.cancel(secondTask.task_id, "queued fixture cancellation");
+      expect((await second).status).toBe(DeliverableStatus.PARTIAL);
+      expect(calls).toBe(1);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("honors the queue bound and frees an aborted queued entry", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    let calls = 0;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const adapter = new ClaudeAdapter({ max_pending_invocations: 1, runner: functionRunner("fn", async () => {
+      calls++;
+      entered();
+      await held;
+      return OK_RESULT;
+    }) });
+    const first = adapter.invoke(invocation(), context().ctx);
+    await started;
+    const queuedSignal = new AbortController();
+    const second = adapter.invoke({ ...invocation(), task_id: "task_bbbbbbbbbb" }, context({ signal: queuedSignal.signal }).ctx);
+    try {
+      await expect(adapter.invoke({ ...invocation(), task_id: "task_cccccccccc" }, context().ctx)).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+      queuedSignal.abort();
+      expect((await second).status).toBe(DeliverableStatus.PARTIAL);
+      const replacement = adapter.invoke({ ...invocation(), task_id: "task_dddddddddd" }, context().ctx);
+      release();
+      await replacement;
+      expect(calls).toBe(2);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+  });
+
+  it("releases the admission slot after a runner failure", async () => {
+    let calls = 0;
+    const adapter = new ClaudeAdapter({ runner: functionRunner("fn", async () => {
+      if (++calls === 1) throw new Error("fixture runner failure");
+      return OK_RESULT;
+    }) });
+    await expect(adapter.invoke(invocation(), context().ctx)).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect((await adapter.invoke({ ...invocation(), task_id: "task_bbbbbbbbbb" }, context().ctx)).status).toBe(DeliverableStatus.COMPLETE);
+  });
+
+  it("cancels an active invocation idempotently without aborting its peer", async () => {
+    const signals = new Map<string, AbortSignal>();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const parent = new AbortController();
+    const peer = new AbortController();
+    const adapter = new ClaudeAdapter({ max_concurrency: 2, runner: functionRunner("cancel fixture", async (inv, ctx) => {
+      signals.set(inv.task_id, ctx.signal);
+      if (signals.size === 2) entered();
+      await new Promise<void>((resolve) => ctx.signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { summary: "cancelled fixture", blocker: "cancelled" };
+    }) });
+    const firstTask = invocation();
+    const secondTask = { ...invocation(), task_id: "task_bbbbbbbbbb" };
+    const first = adapter.invoke(firstTask, context({ signal: parent.signal }).ctx);
+    const second = adapter.invoke(secondTask, context({ signal: peer.signal }).ctx);
+    try {
+      await started;
+      const cancelled = adapter.cancel(firstTask.task_id, "explicit active cancellation");
+      await Promise.resolve();
+      expect(signals.get(firstTask.task_id)?.aborted).toBe(true);
+      expect(signals.get(secondTask.task_id)?.aborted).toBe(false);
+      await cancelled;
+      await adapter.cancel(firstTask.task_id, "duplicate cancellation");
+      expect((await first).status).toBe(DeliverableStatus.PARTIAL);
+    } finally {
+      parent.abort();
+      peer.abort();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  it("preserves an unconfirmed-stop failure even when the signal is aborted", async () => {
+    const controller = new AbortController();
+    const adapter = new ClaudeAdapter({ runner: functionRunner("unconfirmed", async () => {
+      controller.abort();
+      throw new BridgeError("RUNTIME_STOP_UNCONFIRMED" as never, "fixture stop was not confirmed", { runtime_stop_confirmed: false });
+    }) });
+    await expect(adapter.invoke(invocation(), context({ signal: controller.signal }).ctx)).rejects.toMatchObject({
+      code: "RUNTIME_STOP_UNCONFIRMED", details: { runtime_stop_confirmed: false },
+    });
+  });
+
+  it("bounds cancellation of an uncooperative runner and preserves uncertainty across repeated requests", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const states: string[] = [];
+    const adapter = new ClaudeAdapter({ cancel_timeout_ms: 25, runner: functionRunner("uncooperative", async () => {
+      entered(); await held; return OK_RESULT;
+    }) });
+    const pending = adapter.invoke(invocation(), context({ reportRuntimeState: async (state) => { states.push(state); } }).ctx);
+    await started;
+    try {
+      await expect(adapter.cancel(invocation().task_id, "stop")).rejects.toMatchObject({
+        code: ErrorCode.RUNTIME_STOP_UNCONFIRMED, details: { runtime_stop_confirmed: false },
+      });
+      await expect(adapter.cancel(invocation().task_id, "again")).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+      expect(states).toEqual(["unconfirmed"]);
+      await expect(adapter.invoke(invocation(), context().ctx)).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+    } finally { release(); await pending; }
+    await expect(adapter.cancel(invocation().task_id, "after runner returned")).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+  });
+
+  it("does not let a failed telemetry callback mask an unconfirmed stop", async () => {
+    const adapter = new ClaudeAdapter({ runner: functionRunner("unconfirmed", async () => {
+      throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "stop proof missing", { runtime_stop_confirmed: false });
+    }, { telemetry: () => TELEMETRY }) });
+    await expect(adapter.invoke(invocation(), context({ reportTelemetry: async () => {
+      throw new BridgeError(ErrorCode.NOT_OWNER, "stale telemetry callback");
+    } }).ctx)).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+    await expect(adapter.cancel(invocation().task_id, "again")).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+  });
+
+  it("disposes once and cancels active and queued work without launching queued runners", async () => {
+    let calls = 0;
+    let disposeCalls = 0;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const adapter = new ClaudeAdapter({ runner: functionRunner("dispose", async (_inv, ctx) => {
+      calls++; entered();
+      await new Promise<void>((resolve) => ctx.signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { summary: "stopped", blocker: "cancelled" };
+    }, { dispose: async () => { disposeCalls++; } }) });
+    const first = adapter.invoke(invocation(), context().ctx);
+    await started;
+    const queued = adapter.invoke({ ...invocation(), task_id: "task_bbbbbbbbbb" }, context().ctx);
+    await Promise.all([adapter.dispose(), adapter.dispose()]);
+    expect((await first).status).toBe(DeliverableStatus.PARTIAL);
+    expect((await queued).status).toBe(DeliverableStatus.PARTIAL);
+    expect(calls).toBe(1);
+    expect(disposeCalls).toBe(1);
+    await expect(adapter.invoke(invocation(), context().ctx)).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+  });
+});
+
 describe("telemetry reporting", () => {
+  it("projects failure classification and duration provenance without extra nested fields", () => {
+    const projected = projectTelemetryUpdate({
+      runtime_duration_source: "provider_wall",
+      runtime_failure: { category: "quota", source: "runtime_code", retryable: false, retry_after_at: null, raw_error: "PRIVATE" },
+    } as never);
+    expect(projected).toEqual({ runtime_duration_source: "provider_wall", runtime_failure: {
+      category: "quota", source: "runtime_code", retryable: false, retry_after_at: null,
+    } });
+  });
   it("reports once, through the neutral callback, on a successful run", async () => {
     const adapter = new ClaudeAdapter({
       runner: functionRunner("fn", async () => OK_RESULT),

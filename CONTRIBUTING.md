@@ -42,6 +42,7 @@ Every change should pass, with real exit codes:
 ```bash
 npm run build
 npm test
+node scripts/sync-bridge-skill.mjs --check
 node docs/tools/check-doc-links.mjs   # broken links, bad anchors, absolute paths
 ```
 
@@ -68,6 +69,9 @@ check you did not execute.
 - Add deterministic regression coverage for behavior changes. Tests must not depend on real
   model calls, wall-clock timing, or network access.
 - Do not redesign the bridge as part of an unrelated fix.
+- Edit the bridge skill in `skills/using-bridge/`, then run `npm run skills:sync` to generate
+  the `.codex`, `.claude` and `.agents` mirrors. `npm run skills:check` and the deterministic
+  suite verify that all mirrors match the canonical source.
 - Do not run real-model proofs or controlled benchmarks unless the task specifically needs them
   and their cost has been accepted.
 

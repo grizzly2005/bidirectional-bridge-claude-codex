@@ -68,7 +68,7 @@ export class ClaudeWorkSession {
 
   /**
    * What may I safely pick up? Tasks that are unowned, dependency-satisfied, and whose
-   * scope does not collide with a live lease held by another agent.
+   * scope does not collide with a live lease for another task.
    *
    * Checking the lease conflict here — not just at claim time — is what stops Claude from
    * claiming a task it would immediately be unable to start because codex is mid-write in
@@ -77,7 +77,7 @@ export class ClaudeWorkSession {
   availableWork(): Task[] {
     return this.cp.tasks
       .readyTasks()
-      .filter((t) => this.cp.leases.findConflicts(t.spec.scope, this.agent).length === 0);
+      .filter((t) => this.cp.leases.findConflicts(t.spec.scope, this.agent, this.cp.clock.now(), t.task_id).length === 0);
   }
 
   /** Everything currently owned by this agent, in any non-terminal state. */

@@ -18,7 +18,7 @@ describe("parseBridgeServerArgs", () => {
       max_concurrency: 2,
       approval_policy: "never",
       sandbox: "workspace-write",
-      runtime_transport: "mcp",
+      runtime_transport: "app-server",
       help: false,
     });
   });

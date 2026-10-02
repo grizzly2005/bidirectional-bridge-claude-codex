@@ -28,6 +28,8 @@
     "clean": "tsc --build --clean",
     "test": "vitest run",
     "test:watch": "vitest",
+    "skills:check": "node scripts/sync-bridge-skill.mjs --check",
+    "skills:sync": "node scripts/sync-bridge-skill.mjs --write",
     "links:check": "node scripts/repair-workspace-links.mjs",
     "links:fix": "node scripts/repair-workspace-links.mjs --fix",
     "live:claude": "node claude/claude-side/scripts/live-claude-delegation.mjs"

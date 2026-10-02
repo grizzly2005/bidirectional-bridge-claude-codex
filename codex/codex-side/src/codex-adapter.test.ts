@@ -157,6 +157,34 @@ function invocation(
 }
 
 describe("CodexAdapter", () => {
+  it("bounds direct admission and cancels only the queued invocation", async () => {
+    const client = new FakeCodexClient(); let release!: () => void; let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const admitted = new Promise<void>(resolve => { started = resolve; });
+    client.startImpl = async () => { started(); await gate; return { thread_id: "bounded_thread", content: resultJson() }; };
+    const adapter = new CodexAdapter({ client, max_concurrency: 1, max_pending_invocations: 1 });
+    const first = adapter.invoke(invocation("task_0000000001"), context().ctx); await admitted;
+    const cancel = new AbortController();
+    const queued = adapter.invoke(invocation("task_0000000002"), context(cancel.signal).ctx);
+    await expect(adapter.invoke(invocation("task_0000000003"), context().ctx)).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    cancel.abort(); await queued;
+    expect(client.starts).toHaveLength(1);
+    release(); expect((await first).status).toBe("COMPLETE"); await adapter.dispose();
+  });
+  it("preserves stop failure and releases local capacity when final telemetry callback rejects", async () => {
+    const client = new FakeCodexClient();
+    Object.defineProperty(client, "supportsStopConfirmation", { value: true });
+    let calls = 0;
+    client.startImpl = async () => {
+      if (calls++ === 0) throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "primary stop failure", { runtime_stop_confirmed: false });
+      return { thread_id: "thread_next", content: resultJson() };
+    };
+    const adapter = new CodexAdapter({ client, max_concurrency: 1 });
+    const bad = { ...context().ctx, reportTelemetry: async () => { throw new BridgeError(ErrorCode.LEASE_INVALID, "late observation callback"); } };
+    await expect(adapter.invoke(invocation(), bad)).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED });
+    await expect(adapter.invoke(invocation("task_0000000001", "next-key"), context().ctx)).resolves.toMatchObject({ status: "COMPLETE" });
+    await adapter.dispose();
+  });
   it("implements the shared adapter contract and registers real evidence", async () => {
     const client = new FakeCodexClient();
     client.startImpl = async () => ({

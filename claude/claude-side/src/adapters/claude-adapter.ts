@@ -44,6 +44,8 @@ import {
 export interface ClaudeRunner {
   /** Human-readable description of the mechanism, for logs and health output. */
   readonly description: string;
+  /** True only for runners that report running/stopped from correlated process-tree evidence. */
+  readonly supportsStopConfirmation?: boolean;
   /**
    * Execute one task. Implementations MUST honour `ctx.signal` and SHOULD report
    * progress through `ctx` rather than buffering everything until the end.
@@ -113,6 +115,11 @@ export function projectTelemetryUpdate(update: AttemptTelemetryUpdate): AttemptT
     ...(update.runtime_duration_ms !== undefined
       ? { runtime_duration_ms: update.runtime_duration_ms }
       : {}),
+    ...(update.runtime_duration_source !== undefined
+      ? { runtime_duration_source: update.runtime_duration_source } : {}),
+    ...(update.runtime_failure !== undefined ? { runtime_failure: update.runtime_failure === null
+      ? null : { category: update.runtime_failure.category, source: update.runtime_failure.source,
+        retryable: update.runtime_failure.retryable, retry_after_at: update.runtime_failure.retry_after_at } } : {}),
     ...(update.input_tokens !== undefined ? { input_tokens: update.input_tokens } : {}),
     ...(update.output_tokens !== undefined ? { output_tokens: update.output_tokens } : {}),
     ...(update.cached_input_tokens !== undefined
@@ -148,6 +155,10 @@ export interface ClaudeAdapterOptions {
   readonly agent?: string;
   readonly capabilities?: readonly string[];
   readonly max_concurrency?: number;
+  /** Per-adapter pending-call bound; default 64. This is not a workspace-wide limit. */
+  readonly max_pending_invocations?: number;
+  /** Deadline for cancellation acknowledgement; an expiry retains an uncertain runtime. */
+  readonly cancel_timeout_ms?: number;
   readonly now?: () => number;
 }
 
@@ -155,17 +166,46 @@ export class ClaudeAdapter implements AgentAdapter {
   readonly info: AdapterInfo;
   private readonly runner: ClaudeRunner;
   private readonly now: () => number;
-  private readonly cancelled = new Set<TaskId>();
+  private disposed = false;
+  private disposePromise: Promise<void> | undefined;
+  private readonly invocations = new Map<TaskId, {
+    controller: AbortController; done: Promise<Deliverable>; context: InvocationContext;
+  }>();
+  private readonly uncertainStops = new Map<TaskId, BridgeError>();
+  private readonly cancelTimeoutMs: number;
+  private readonly maxPending: number;
+  private active = 0;
+  private readonly pending: Array<{
+    task_id: TaskId;
+    signal: AbortSignal;
+    onAbort: () => void;
+    timer: ReturnType<typeof setTimeout>;
+    cancel: (reason: string) => void;
+    resolve: (release: () => void) => void;
+  }> = [];
 
   constructor(options: ClaudeAdapterOptions) {
     this.runner = options.runner;
     this.now = options.now ?? (() => Date.now());
+    const concurrency = options.max_concurrency ?? 1;
+    this.maxPending = options.max_pending_invocations ?? 64;
+    this.cancelTimeoutMs = options.cancel_timeout_ms ?? 30_000;
+    if (!Number.isInteger(concurrency) || concurrency < 1
+      || !Number.isInteger(this.maxPending) || this.maxPending < 0) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Claude concurrency must be positive and the pending bound non-negative");
+    }
+    if (!Number.isSafeInteger(this.cancelTimeoutMs) || this.cancelTimeoutMs < 1 || this.cancelTimeoutMs > 60_000) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Claude cancellation timeout must be 1..60000ms");
+    }
     this.info = {
       agent: options.agent ?? "claude",
       implementation: `claude-adapter(${options.runner.description})`,
       version: "0.1.0",
-      capabilities: options.capabilities ?? ["code", "tests", "docs", "review", "analysis", "resume"],
-      max_concurrency: options.max_concurrency ?? 1,
+      capabilities: [...new Set([
+        ...(options.capabilities ?? ["code", "tests", "docs", "review", "analysis", "resume"]),
+        ...(this.runner.supportsStopConfirmation === true ? ["stop-confirmation"] : []),
+      ])],
+      max_concurrency: concurrency,
     };
   }
 
@@ -173,6 +213,7 @@ export class ClaudeAdapter implements AgentAdapter {
     // Contract says health() must not throw — an adapter that explodes on a liveness
     // probe would take down the orchestrator's scheduling loop.
     try {
+      if (this.disposed) return { status: AdapterHealth.UNAVAILABLE, detail: "adapter disposed", checked_at: this.now() };
       if (!this.runner.probe) {
         return { status: AdapterHealth.READY, checked_at: this.now() };
       }
@@ -191,7 +232,112 @@ export class ClaudeAdapter implements AgentAdapter {
     }
   }
 
-  async invoke(invocation: TaskInvocation, ctx: InvocationContext): Promise<Deliverable> {
+  invoke(invocation: TaskInvocation, ctx: InvocationContext): Promise<Deliverable> {
+    if (this.disposed) return Promise.reject(new BridgeError(ErrorCode.ADAPTER_FAILURE, "Claude adapter is disposed"));
+    const uncertain = this.uncertainStops.get(invocation.task_id);
+    if (uncertain) return Promise.reject(uncertain);
+    if (this.invocations.has(invocation.task_id)) {
+      return Promise.reject(new BridgeError(ErrorCode.ADAPTER_FAILURE, "Claude task already has an active invocation"));
+    }
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort(ctx.signal.reason);
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+    if (ctx.signal.aborted) onAbort();
+    const invocationContext: InvocationContext = { ...ctx, signal: controller.signal,
+      reportRuntimeState: async (state) => {
+        await ctx.reportRuntimeState?.(state);
+        if (state === "stopped") this.uncertainStops.delete(invocation.task_id);
+      },
+    };
+    const done = Promise.resolve().then(() => this.invokeBounded(invocation, invocationContext)).catch((error: unknown) => {
+      if (error instanceof BridgeError && error.code === ErrorCode.RUNTIME_STOP_UNCONFIRMED) {
+        this.uncertainStops.set(invocation.task_id, error);
+      }
+      throw error;
+    }).finally(() => {
+      ctx.signal.removeEventListener("abort", onAbort);
+      if (this.invocations.get(invocation.task_id) === entry) this.invocations.delete(invocation.task_id);
+    });
+    const entry = { controller, done, context: invocationContext };
+    this.invocations.set(invocation.task_id, entry);
+    return done;
+  }
+
+  private async invokeBounded(invocation: TaskInvocation, ctx: InvocationContext): Promise<Deliverable> {
+    if (ctx.signal.aborted) {
+      await ctx.reportRuntimeState?.("stopped");
+      return this.partial(invocation, "cancelled before admission", []);
+    }
+    let release: () => void;
+    try {
+      release = await this.acquireSlot(invocation, ctx.signal);
+    } catch (error) {
+      await ctx.reportRuntimeState?.("stopped");
+      if (error instanceof BridgeError && error.code === ErrorCode.TIMEOUT) {
+        return this.partial(invocation, error.message, []);
+      }
+      throw error;
+    }
+    let runnerEntered = false;
+    try {
+      return await this.execute(invocation, ctx, () => { runnerEntered = true; });
+    } finally {
+      try { if (!runnerEntered) await ctx.reportRuntimeState?.("stopped"); }
+      finally { release(); }
+    }
+  }
+
+  private acquireSlot(invocation: TaskInvocation, signal: AbortSignal): Promise<() => void> {
+    const remaining = invocation.deadline_at - this.now();
+    if (signal.aborted || remaining <= 0) {
+      return Promise.reject(new BridgeError(ErrorCode.TIMEOUT, "Claude admission deadline reached"));
+    }
+    if (this.active < this.info.max_concurrency) {
+      this.active++;
+      return Promise.resolve(this.releaser());
+    }
+    if (this.pending.length >= this.maxPending) {
+      return Promise.reject(new BridgeError(ErrorCode.ADAPTER_FAILURE, "Claude pending invocation queue is full"));
+    }
+    return new Promise((resolve, reject) => {
+      const cancel = (reason: string): void => {
+        const index = this.pending.indexOf(waiter);
+        if (index < 0) return;
+        this.pending.splice(index, 1);
+        clearTimeout(waiter.timer);
+        signal.removeEventListener("abort", waiter.onAbort);
+        reject(new BridgeError(ErrorCode.TIMEOUT, reason));
+      };
+      const waiter = {
+        task_id: invocation.task_id,
+        signal,
+        onAbort: () => cancel("Claude invocation aborted while queued"),
+        timer: setTimeout(() => cancel("Claude admission deadline reached while queued"), remaining),
+        cancel,
+        resolve,
+      };
+      this.pending.push(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+    });
+  }
+
+  private releaser(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.pending.shift();
+      if (next) {
+        clearTimeout(next.timer);
+        next.signal.removeEventListener("abort", next.onAbort);
+        next.resolve(this.releaser());
+      } else {
+        this.active--;
+      }
+    };
+  }
+
+  private async execute(invocation: TaskInvocation, ctx: InvocationContext, markRunnerEntered: () => void): Promise<Deliverable> {
     await ctx.report({
       state: TaskState.WORKING,
       current_action: `claude starting: ${invocation.spec.objective}`,
@@ -202,8 +348,7 @@ export class ClaudeAdapter implements AgentAdapter {
       next_action: "execute task within leased scope",
     });
 
-    if (this.cancelled.has(invocation.task_id) || ctx.signal.aborted) {
-      this.cancelled.delete(invocation.task_id);
+    if (ctx.signal.aborted) {
       return this.partial(invocation, "cancelled before work began", []);
     }
 
@@ -229,12 +374,15 @@ export class ClaudeAdapter implements AgentAdapter {
     }
 
     let result: ClaudeRunResult | undefined;
+    let primaryError: unknown;
     try {
       try {
+        markRunnerEntered();
         result = await this.runner.run(invocation, ctx);
       } catch (err) {
+        if (err instanceof BridgeError && err.code === ErrorCode.RUNTIME_STOP_UNCONFIRMED) throw err;
         if (ctx.signal.aborted) {
-          return this.partial(invocation, "deadline reached during execution", []);
+          return this.partial(invocation, "invocation cancelled during execution", []);
         }
         // Preserve a BridgeError's code instead of flattening everything to ADAPTER_FAILURE.
         // The code carries retryability: a runner reporting TIMEOUT or INTERNAL is describing
@@ -250,12 +398,25 @@ export class ClaudeAdapter implements AgentAdapter {
         );
       }
 
+      if (ctx.signal.aborted && !result.blocker) {
+        return this.partial(invocation, "invocation cancelled during execution", result.artifacts ?? [],
+          result.remaining_risks ?? [], result.changed_scope ?? [], result.verification_results ?? []);
+      }
+
       return await this.finish(invocation, ctx, result);
+    } catch (error) {
+      primaryError = error;
+      throw error;
     } finally {
       // Every exit path, including the throws above: an attempt that failed costs real
       // tokens and real wall time, and leaving it out of the record would make the
       // benchmark's per-attempt costs systematically optimistic.
-      await this.reportTelemetry(invocation, ctx, result);
+      try { await this.reportTelemetry(invocation, ctx, result); }
+      catch (error) {
+        // A late/fenced telemetry write must not erase the reason a scope stays quarantined.
+        if (primaryError instanceof BridgeError && primaryError.code === ErrorCode.RUNTIME_STOP_UNCONFIRMED) throw primaryError;
+        throw error;
+      }
     }
   }
 
@@ -330,12 +491,53 @@ export class ClaudeAdapter implements AgentAdapter {
     };
   }
 
-  async cancel(task_id: TaskId, _reason: string): Promise<void> {
-    this.cancelled.add(task_id);
+  async cancel(task_id: TaskId, reason: string): Promise<void> {
+    const uncertain = this.uncertainStops.get(task_id);
+    if (uncertain) throw uncertain;
+    const active = this.invocations.get(task_id);
+    if (!active) return;
+    active.controller.abort(new Error(reason || "Claude invocation cancelled"));
+    for (const waiter of [...this.pending]) {
+      if (waiter.task_id === task_id) waiter.cancel("Claude invocation cancelled while queued");
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([active.done, new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+            "Claude runner did not acknowledge cancellation before its stop deadline",
+            { task_id, runtime_stop_confirmed: false });
+          this.uncertainStops.set(task_id, error);
+          void active.context.reportRuntimeState?.("unconfirmed").catch(() => {});
+          reject(error);
+        }, this.cancelTimeoutMs);
+      })]);
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === ErrorCode.RUNTIME_STOP_UNCONFIRMED) throw error;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
-  async dispose(): Promise<void> {
-    await this.runner.dispose?.();
+  dispose(): Promise<void> {
+    return this.disposePromise ??= this.disposeOnce();
+  }
+
+  private async disposeOnce(): Promise<void> {
+    this.disposed = true;
+    const results = await Promise.allSettled([...this.invocations.keys()]
+      .map((task_id) => this.cancel(task_id, "Claude adapter disposed")));
+    const unconfirmed = results.find((result) => result.status === "rejected"
+      && result.reason instanceof BridgeError && result.reason.code === ErrorCode.RUNTIME_STOP_UNCONFIRMED);
+    if (unconfirmed?.status === "rejected") throw unconfirmed.reason;
+    if (this.runner.dispose) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([this.runner.dispose(), new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+            "Claude runner did not finish disposal before its stop deadline", { runtime_stop_confirmed: false })),
+          this.cancelTimeoutMs);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
+    }
   }
 
   private partial(
@@ -382,6 +584,9 @@ export function functionRunner(
     probe?: () => Promise<{ ok: boolean; detail?: string }>;
     sessionId?: (invocation: TaskInvocation) => string | undefined;
     telemetry?: (invocation: TaskInvocation) => AttemptTelemetryUpdate | undefined;
+    dispose?: () => Promise<void>;
+    /** Opt in only when the function reports correlated runtime stop evidence through ctx. */
+    supportsStopConfirmation?: boolean;
   } = {},
 ): ClaudeRunner {
   return {
@@ -390,5 +595,7 @@ export function functionRunner(
     ...(options.probe ? { probe: options.probe } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
+    ...(options.dispose ? { dispose: options.dispose } : {}),
+    ...(options.supportsStopConfirmation === true ? { supportsStopConfirmation: true } : {}),
   };
 }

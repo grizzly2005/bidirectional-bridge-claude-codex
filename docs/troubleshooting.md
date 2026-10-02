@@ -121,10 +121,10 @@ and if that fails with `SCOPE_CONFLICT`, treat it as the case above.
 ### `NOT_OWNER`
 
 The bound caller does not own that task or hold that lease. Stop the mutation. Reading state is
-fine; finishing, blocking, repairing, or releasing another agent's work is not. A parent
-manager may read a child's result but cannot mutate the child. The sole narrow exception is
-`bridge_resume_delegated_task`: a direct parent owner may request strict recovery when durable
-lineage proves it created that child; the worker remains owner and execution agent.
+fine; arbitrary state, handle or lease mutations of another agent's work are not. The narrow
+direct-manager operations are strict resume, targeted cancellation, prelaunch continuation
+and observation repair. Each requires durable proof of direct parent ownership and child
+creation; the worker remains owner and execution agent.
 
 ### `DEPENDENCY_UNSATISFIED` when entering `WORKING`
 
@@ -190,7 +190,8 @@ eligible task.
 
 ### A task is stranded after a crash, timeout, or interrupted process
 
-1. `bridge_recover` — expires dead leases and identifies stranded state.
+1. `bridge_recover` — reconciles leases and identifies stranded state; quarantine without
+   positive stop evidence remains conflicting.
 2. `bridge_get_task` — inspect the specific task. Never print its raw execution handle.
 3. Choose one operation, called **once** with the durable `task_id`:
    - existing owner: `bridge_resume_task`;
@@ -198,7 +199,7 @@ eligible task.
 
 Expect the same task and runtime session, a new adjacent attempt with `resumed_from_attempt`,
 a fresh lease held under the child owner, separate worker telemetry, unchanged ownership, and
-automatic lease release on every exit path. A manager does not need to open the worker's native
+lease release after positive stop or honest quarantine. A manager does not need to open the worker's native
 client; the bridge selects the child owner's adapter from durable state.
 
 ### Strict resume fails
@@ -208,6 +209,28 @@ does **not** authorize a fresh thread. Leave the same task blocked and report th
 Creating a replacement task or a new runtime thread is a contract violation, not a workaround.
 
 See [recovery.md](recovery.md) for the full model.
+
+### Cancellation was acknowledged but the scope is still occupied
+
+Inspect `bridge_get_task.execution.runtime_stop_confirmed`. A local abort or interrupt RPC
+ACK does not establish stop. `RUNTIME_STOP_UNCONFIRMED` preserves quarantine beyond expiry
+and prevents late callbacks or same-task subdivision from reopening the scope. Wait for
+positive terminal lifecycle evidence; do not force release or kill a shared server. See
+[BRIDGE_RELEASE_ROLLBACK.md](BRIDGE_RELEASE_ROLLBACK.md) before restarting or migrating writers.
+
+### Scope contention blocked a task before it launched
+
+Resolve the conflicting lease, then use `bridge_continue_task` with the same task and a new
+stable continuation key. The original contract, inputs, lineage and total deadline remain
+fixed; no replacement child or runtime handle is required.
+
+### An implicit Codex desktop model is unavailable in the installed CLI
+
+The default App Server transport checks the official runtime catalog before thread launch.
+An unsupported implicit OpenAI model uses the catalog's unique default. An explicit
+unsupported model fails before launch; diagnose that selection rather than retrying it
+unchanged. No configuration or account settings are rewritten. Custom provider namespaces
+keep their configured model.
 
 ## Telemetry
 
@@ -234,6 +257,21 @@ Runtime-reported cost is not confirmed billing. When `billing_mode_known=false`,
 not be presented as an invoice.
 
 ## Repository state
+
+### Work finished but strict telemetry failed
+
+Inspect the business deliverable and its observation receipt separately. Operational mode
+preserves delivered work with unknown usage; strict mode can return `TELEMETRY_INCOMPLETE`
+while the task is DONE. Use `bridge_repair_observation` for a stored validated draft after
+a storage failure, without another model invocation. Missing provider usage cannot be
+reconstructed, and privacy/schema rejections must not be bypassed.
+
+### A rebuilt bridge still behaves like the previous version
+
+Call `bridge_doctor` and compare its startup capture with current disk fingerprints. A
+rebuild does not reload a running MCP process. An offline doctor cannot prove loaded code
+or provider health. Follow [BRIDGE_RELEASE_ROLLBACK.md](BRIDGE_RELEASE_ROLLBACK.md) for an
+identified installation, compatible database backup and verified restart.
 
 ### Where is the local state?
 

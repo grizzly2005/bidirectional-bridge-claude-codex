@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   ArtifactSchema,
@@ -159,6 +159,27 @@ export class ArtifactRegistry {
 
   resolveMany(ids: readonly ArtifactId[]): Artifact[] {
     return ids.map((id) => this.get(id));
+  }
+
+  /** Freeze inputs at their published hash; mutable project paths never reach a worker. */
+  resolveForInvocation(ids: readonly ArtifactId[]): Artifact[] {
+    return ids.map(id => {
+      const artifact = this.get(id);
+      const content = artifact.inline !== undefined ? Buffer.from(artifact.inline, "utf8")
+        : readFileSync(join(this.workspaceRoot, artifact.path!));
+      if (content.length !== artifact.bytes || createHash("sha256").update(content).digest("hex") !== artifact.sha256) {
+        throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Input artifact no longer matches its published content", { artifact_id: id });
+      }
+      if (artifact.inline !== undefined) return artifact;
+      const path = `.bridge/input-snapshots/${artifact.sha256}`;
+      mkdirSync(join(this.workspaceRoot, ".bridge/input-snapshots"), { recursive: true });
+      try { writeFileSync(join(this.workspaceRoot, path), content, { flag: "wx", mode: 0o444 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      if (createHash("sha256").update(readFileSync(join(this.workspaceRoot, path))).digest("hex") !== artifact.sha256) {
+        throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Input snapshot integrity failed");
+      }
+      return { ...artifact, path };
+    });
   }
 
   list(task_id: TaskId): Artifact[] {

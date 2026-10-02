@@ -11,7 +11,7 @@
  * `scripts/live-claude-delegation.mjs` does, and it needs credentials.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,7 @@ import {
   CLAUDE_REQUESTED_MODEL,
   buildPrompt,
   buildRunnerTelemetry,
+  classifyClaudeRuntimeFailure,
   isOpusFamilyModel,
   normalizeClaudeUsage,
   parseStructuredOutput,
@@ -406,6 +407,24 @@ describe("session resumption", () => {
  * ------------------------------------------------------------------ */
 
 describe("execution bounding", () => {
+  it.each(["deadline", "resume"])("confirms no runtime was launched for rejected preflight: %s", async (kind) => {
+    const states: string[] = [];
+    const run = fixtureRunner("ok").run(invocationFor(kind === "deadline" ? { deadline_at: Date.now() - 1 }
+      : { resume_required: true, previous_execution_handle: null }), {
+      report: async () => {}, publishArtifact: async () => "art_0000000000",
+      recordVerification: async () => {}, raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+      reportRuntimeState: async (state) => { states.push(state); }, signal: new AbortController().signal,
+    });
+    if (kind === "resume") await expect(run).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    else expect(await run).toMatchObject({ blocker: "no runtime was launched" });
+    expect(states).toEqual(["stopped"]);
+    expect(existsSync(argvFile)).toBe(false);
+  });
+
+  it("advertises process stop confirmation for the real runner even with custom capabilities", () => {
+    const adapter = new ClaudeAdapter({ runner: fixtureRunner("ok"), capabilities: ["code"] });
+    expect(adapter.info.capabilities).toEqual(["code", "stop-confirmation"]);
+  });
   it("runs in the task workspace, not the launcher's cwd", async () => {
     await delegate("ok");
     // realpath differences on macOS temp dirs make an exact compare brittle.
@@ -541,6 +560,85 @@ describe("execution bounding", () => {
     expect(deliverable.summary.toLowerCase()).toContain("cancel");
   }, 30_000);
 
+  it("confirms active cancellation only after the process and its tool descendant stop", async () => {
+    const pidFile = join(workspace, "tool.pid");
+    const heartbeatFile = join(workspace, "tool.heartbeat");
+    const adapter = new ClaudeAdapter({ runner: fixtureRunner("tree", {
+      killGraceMs: 30,
+      env: { ...process.env, FAKE_CLAUDE_MODE: "tree", FAKE_CLAUDE_CHILD_PID_FILE: pidFile,
+        FAKE_CLAUDE_HEARTBEAT_FILE: heartbeatFile },
+    }), agent: "claude" });
+    const invocation = invocationFor();
+    const states: string[] = [];
+    const pending = adapter.invoke(invocation, {
+      report: async () => {}, publishArtifact: async () => "art_0000000000",
+      recordVerification: async () => {}, raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+      reportRuntimeState: async (state) => { states.push(state); }, signal: new AbortController().signal,
+    });
+    await expect.poll(() => existsSync(pidFile)).toBe(true);
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    try {
+      await Promise.all([adapter.cancel(invocation.task_id, "test cancellation"), adapter.cancel(invocation.task_id, "again")]);
+      const deliverable = await pending;
+      expect(deliverable.status).toBe(DeliverableStatus.PARTIAL);
+      expect(states).toEqual(["running", "stopped"]);
+      const heartbeat = readFileSync(heartbeatFile, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(readFileSync(heartbeatFile, "utf8")).toBe(heartbeat);
+    } finally {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already stopped */ }
+      await adapter.cancel(invocation.task_id, "test teardown");
+      await pending.catch(() => {});
+    }
+  }, 30_000);
+
+  it("cleans up an orphaned tool before confirming a naturally closed runtime", async () => {
+    const pidFile = join(workspace, "orphan.pid");
+    const heartbeatFile = join(workspace, "orphan.heartbeat");
+    const states: string[] = [];
+    const adapter = new ClaudeAdapter({ runner: fixtureRunner("orphan", {
+      killGraceMs: 30,
+      env: { ...process.env, FAKE_CLAUDE_MODE: "orphan", FAKE_CLAUDE_CHILD_PID_FILE: pidFile,
+        FAKE_CLAUDE_HEARTBEAT_FILE: heartbeatFile },
+    }), agent: "claude" });
+    const pending = adapter.invoke(invocationFor(), {
+      report: async () => {}, publishArtifact: async () => "art_0000000000",
+      recordVerification: async () => {}, raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+      reportRuntimeState: async (state) => { states.push(state); }, signal: new AbortController().signal,
+    });
+    const outcome = pending.catch((error: unknown) => error);
+    await expect.poll(() => existsSync(pidFile)).toBe(true);
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    try {
+      expect(await outcome).toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+      expect(states).toEqual(["running", "stopped"]);
+      const heartbeat = readFileSync(heartbeatFile, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(readFileSync(heartbeatFile, "utf8")).toBe(heartbeat);
+    } finally {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already stopped */ }
+    }
+  }, 30_000);
+
+  it("reports unconfirmed rather than stopped when process-tree inspection is unavailable", async () => {
+    class UnconfirmedRunner extends FixtureRunner {
+      protected override async ensureProcessTreeStopped(): Promise<boolean> { return false; }
+    }
+    const adapter = new ClaudeAdapter({ runner: new UnconfirmedRunner({ command: process.execPath,
+      env: { ...process.env, FAKE_CLAUDE_MODE: "ok" } }), agent: "claude" });
+    const states: string[] = [];
+    await expect(adapter.invoke(invocationFor(), {
+      report: async () => {}, publishArtifact: async () => "art_0000000000",
+      recordVerification: async () => {}, raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+      reportRuntimeState: async (state) => {
+        states.push(state);
+        if (state === "unconfirmed") throw new Error("runtime-state observer unavailable");
+      }, signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+      details: { runtime_stop_confirmed: false } });
+    expect(states).toEqual(["running", "unconfirmed"]);
+  });
+
   it("refuses to fabricate success when the runtime never returns a result frame", async () => {
     const outcome = await delegate("noresult");
     expect(outcome.error?.code).toBe(ErrorCode.ADAPTER_FAILURE);
@@ -561,6 +659,20 @@ describe("execution bounding", () => {
  * ------------------------------------------------------------------ */
 
 describe("parseStructuredOutput", () => {
+  it("retains canonical verification after an indented command fence in real Windows output", () => {
+    const canonical = { summary: "Marker verified", verification_results: [
+      { kind: "manual", command: "node marker-check.js", passed: true, exit_code: 0, summary: "exact match" },
+    ], changed_scope: [] };
+    const text = ["1. Verification:", "   ```", "   node marker-check.js", "   ```", "", "```json",
+      JSON.stringify(canonical, null, 2), "```"].join("\r\n");
+    expect(parseStructuredOutput(text)).toEqual(canonical);
+  });
+
+  it("does not treat another language's closing fence as the start of a result", () => {
+    const canonical = { summary: "final", verification_results: [] };
+    const text = ["```javascript", "const x = {};", "```", "", "```json", JSON.stringify(canonical), "```"].join("\n");
+    expect(parseStructuredOutput(text)).toEqual(canonical);
+  });
   it("reads the last fenced JSON block, ignoring earlier illustrative ones", () => {
     const text = [
       "Here is an example of what I might return:",
@@ -805,6 +917,20 @@ describe("buildRunnerTelemetry", () => {
  * ------------------------------------------------------------------ */
 
 describe("telemetry from a real Claude Code stream", () => {
+  it("does not reuse the previous attempt's telemetry when a resume fails before launch", async () => {
+    const adapter = new ClaudeAdapter({ runner: fixtureRunner("ok") });
+    const observations: AttemptTelemetryUpdate[] = [];
+    const ctx = { report: async () => {}, publishArtifact: async () => "art_0000000000" as const,
+      recordVerification: async () => {}, raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+      reportTelemetry: async (update: AttemptTelemetryUpdate) => { observations.push(update); },
+      signal: new AbortController().signal };
+    await adapter.invoke(invocationFor(), ctx);
+    expect(observations).toHaveLength(1);
+    await expect(adapter.invoke(invocationFor({ attempt: 1, resume_required: true,
+      previous_execution_handle: null }), ctx)).rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect(observations).toHaveLength(1);
+  });
+
   it("reports the runtime's own numbers, parsed from the result frame", async () => {
     const { telemetry, invocation } = await runCapturing("ok");
 
@@ -964,5 +1090,62 @@ describe("Opus family verification", () => {
     expect(isOpusFamilyModel("claude-3-opus-20240229")).toBe(true);
     expect(isOpusFamilyModel("claude-sonnet-4-5")).toBe(false);
     expect(isOpusFamilyModel("superopus-preview")).toBe(false);
+  });
+});
+
+describe("machine-readable runtime failures", () => {
+  it.each([
+    [429, "quota", false], [401, "auth", false], [503, "transient", true],
+    ["runtime_profile_mismatch", "profile", false], ["invalid_request_error", "contract", false],
+    ["error_max_turns", "turn_limit", false], ["undocumented_failure", "unknown", false],
+  ])("classifies code %s as %s without exposing diagnostic text", (code, category, retryable) => {
+    expect(classifyClaudeRuntimeFailure({ type: "result", session_id: "fixture", is_error: true, error_code: code as string | number }))
+      .toEqual({ category, source: "runtime_code", retryable, retry_after_at: null });
+  });
+
+  it("classifies explicit runtime codes and uses only a supplied retry timestamp", () => {
+    const frame = { type: "result", session_id: "fixture", is_error: true, error_code: "rate_limit_error", retry_after_at: 1_900_000_000_000 };
+    expect(classifyClaudeRuntimeFailure(frame as never)).toEqual({
+      category: "quota", source: "runtime_code", retryable: false, retry_after_at: 1_900_000_000_000,
+    });
+    expect(classifyClaudeRuntimeFailure({ ...frame, retry_after_at: undefined } as never)?.retry_after_at).toBeNull();
+  });
+
+  it("does not diagnose an auth or quota problem from successful model-authored prose", () => {
+    expect(classifyClaudeRuntimeFailure({ type: "result", session_id: "fixture", is_error: false, subtype: "success", result: "Please fix quota and authentication in the repository" })).toBeNull();
+  });
+
+  it("uses an explicit API error frame even without a result frame", async () => {
+    const { telemetry, error } = await runCapturing("quota-frame");
+    expect(error).toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect(telemetry[0]?.runtime_failure).toEqual({ category: "quota", source: "runtime_code", retryable: false, retry_after_at: null });
+  });
+
+  it("does not classify model stdout as a failed-process diagnostic", async () => {
+    const { telemetry, error } = await runCapturing("misleading-stdout");
+    expect(error).toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect(telemetry[0]?.runtime_failure).toEqual({ category: "unknown", source: "runtime_code", retryable: false, retry_after_at: null });
+  });
+
+  it("does not crash on malformed optional error fields", () => {
+    expect(classifyClaudeRuntimeFailure({ type: "result", session_id: "fixture", is_error: true,
+      subtype: 3, result: 9, error_code: {}, error: null } as never))
+      .toEqual({ category: "unknown", source: "runtime_code", retryable: false, retry_after_at: null });
+  });
+
+  it("separates auth, transient, turn-limit and unknown runtime failures", () => {
+    const failed = { type: "result", session_id: "fixture", is_error: true } as const;
+    expect(classifyClaudeRuntimeFailure({ ...failed, result: "Not logged in · Please run /login" })?.category).toBe("auth");
+    expect(classifyClaudeRuntimeFailure({ ...failed, result: "Server overloaded; please retry" })?.category).toBe("transient");
+    expect(classifyClaudeRuntimeFailure({ ...failed, result: "Undocumented failure" })?.category).toBe("unknown");
+    expect(classifyClaudeRuntimeFailure({ ...failed, subtype: "error_max_turns", is_error: false })?.category).toBe("turn_limit");
+  });
+
+  it("records whether a duration comes from provider wall, API or local time", () => {
+    const base = { frame: null, runtime_version: null, model: null, started_at: 10, first_output_at: null, ended_at: 30,
+      prompt_bytes: 1, exit_code: 0, exit_signal: null, cancelled: false, timed_out: false } as const;
+    expect(buildRunnerTelemetry(base).runtime_duration_source).toBe("local_span");
+    expect(buildRunnerTelemetry({ ...base, frame: { type: "result", session_id: "fixture", duration_api_ms: 8 } }).runtime_duration_source).toBe("provider_api");
+    expect(buildRunnerTelemetry({ ...base, frame: { type: "result", session_id: "fixture", duration_ms: 9, duration_api_ms: 8 } }).runtime_duration_source).toBe("provider_wall");
   });
 });

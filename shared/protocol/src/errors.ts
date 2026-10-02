@@ -26,6 +26,13 @@ export const ErrorCode = {
   IDEMPOTENCY_MISMATCH: "IDEMPOTENCY_MISMATCH",
   /** Adapter/agent did not respond within its deadline. */
   TIMEOUT: "TIMEOUT",
+  /** Stop was requested but no correlated terminal runtime evidence arrived. */
+  RUNTIME_STOP_UNCONFIRMED: "RUNTIME_STOP_UNCONFIRMED",
+  /** Business execution finished, but explicitly required observations are missing. */
+  TELEMETRY_INCOMPLETE: "TELEMETRY_INCOMPLETE",
+  /** A durable operation already owns the right to launch this request. */
+  OPERATION_IN_PROGRESS: "OPERATION_IN_PROGRESS",
+  TASK_CANCELLED: "TASK_CANCELLED",
   /** Adapter failed for an agent-specific reason; see `details`. */
   ADAPTER_FAILURE: "ADAPTER_FAILURE",
   /** Runtime-reported execution profile contradicts the bridge-owned profile. */
@@ -65,6 +72,12 @@ export class BridgeError extends Error {
   }
 
   get retryable(): boolean {
+    const failure = this.details["runtime_failure"];
+    if (failure && typeof failure === "object") {
+      const runtime = failure as Record<string, unknown>;
+      if (["quota", "auth", "profile", "contract", "turn_limit"].includes(String(runtime["category"]))) return false;
+      if (this.code === ErrorCode.ADAPTER_FAILURE && runtime["category"] === "transient" && runtime["retryable"] === true) return true;
+    }
     return RETRYABLE_CODES.has(this.code);
   }
 

@@ -15,6 +15,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ControlPlane, Orchestrator } from "@bridge/control-plane";
 import type { AgentAdapter, AgentId } from "@bridge/protocol";
+import type { BridgeProcessIdentity } from "./diagnostics.js";
 import {
   TOOLS,
   runTool,
@@ -53,6 +54,7 @@ export interface BridgeServerOptions {
   readonly serverName?: string;
   readonly serverVersion?: string;
   readonly instructions?: string;
+  readonly startupIdentity?: BridgeProcessIdentity;
   /**
    * Diagnostics sink. Defaults to stderr because stdout IS the MCP transport — anything
    * written there that is not a JSON-RPC frame corrupts the session.
@@ -87,6 +89,7 @@ export class BridgeMcpServer {
       orchestrator: this.orchestrator,
       defaultAgent: options.agent ?? "bridge",
       delegationPolicy: options.delegationPolicy ?? "allow",
+      ...(options.startupIdentity ? { startupIdentity: options.startupIdentity } : {}),
     };
 
     this.tools = [...TOOLS, ...(options.extraTools ?? [])];

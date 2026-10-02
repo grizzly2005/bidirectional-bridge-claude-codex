@@ -36,17 +36,23 @@ export interface CodexStartRequest {
   readonly config?: Record<string, unknown>;
   readonly timeout_ms: number;
   readonly signal: AbortSignal;
+  /** Operational mode preserves a completed result when usage is unavailable. */
+  readonly telemetry_mode?: "operational" | "strict";
   /** Called at the first instant the transport exposes the new thread id. */
   readonly on_execution_handle?: (thread_id: string) => Promise<void>;
+  readonly on_runtime_state?: (state: "running" | "stopped" | "unconfirmed") => Promise<void>;
 }
 
 export interface CodexReplyRequest {
   readonly thread_id: string;
+  readonly cwd?: string;
   readonly prompt: string;
   readonly timeout_ms: number;
   readonly signal: AbortSignal;
+  readonly telemetry_mode?: "operational" | "strict";
   /** Called after a persisted thread is loaded, before its continuation turn starts. */
   readonly on_execution_handle?: (thread_id: string) => Promise<void>;
+  readonly on_runtime_state?: (state: "running" | "stopped" | "unconfirmed") => Promise<void>;
 }
 
 export type CodexMcpProbeState = "READY" | "DEGRADED" | "UNAVAILABLE";
@@ -58,6 +64,7 @@ export interface CodexMcpProbe {
 }
 
 export interface CodexMcpClient {
+  readonly supportsStopConfirmation?: boolean;
   probe(): Promise<CodexMcpProbe>;
   start(request: CodexStartRequest): Promise<CodexMcpResponse>;
   reply(request: CodexReplyRequest): Promise<CodexMcpResponse>;
@@ -214,6 +221,7 @@ function parseExecResumeOutput(stdout: string, fallbackThreadId: string): CodexM
 
 /** Long-lived stdio client for the two tools exposed by `codex mcp-server`. */
 export class CodexMcpProcessClient implements CodexMcpClient {
+  readonly supportsStopConfirmation = true;
   private readonly options: Required<
     Pick<
       CodexMcpProcessClientOptions,

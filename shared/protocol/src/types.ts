@@ -87,6 +87,8 @@ export interface WriteScope {
 
 export const LeaseState = {
   HELD: "HELD",
+  /** Blocks conflicting acquisitions until a runtime stop is positively confirmed. */
+  QUARANTINED: "QUARANTINED",
   RELEASED: "RELEASED",
   EXPIRED: "EXPIRED",
 } as const;
@@ -198,6 +200,8 @@ export interface TaskSpec {
   readonly deadline_ms?: number;
   /** Optional runtime turn ceiling. Runtimes that support it enforce the shared bounds. */
   readonly max_turns?: number;
+  /** Preserve business results independently from explicitly required measurements. */
+  readonly telemetry_mode?: "operational" | "strict";
   readonly priority?: number;
   readonly tags?: readonly string[];
 }
@@ -291,6 +295,14 @@ export const AttemptTerminationKind = {
 export type AttemptTerminationKind =
   (typeof AttemptTerminationKind)[keyof typeof AttemptTerminationKind];
 
+/** Machine-readable runtime evidence; no provider transcript or credential fields. */
+export interface RuntimeFailure {
+  readonly category: "quota" | "auth" | "transient" | "profile" | "contract" | "turn_limit" | "unknown";
+  readonly source: "runtime_code" | "runtime_text";
+  readonly retryable: boolean;
+  readonly retry_after_at: number | null;
+}
+
 /**
  * One final, normalized record for one task attempt.
  *
@@ -320,7 +332,19 @@ export interface AttemptTelemetry {
   readonly first_output_at: number | null;
   readonly runtime_ended_at: number | null;
   readonly completed_at: number;
+  /** Legacy elapsed duration from orchestration start; cumulative across automatic retries. */
   readonly wall_duration_ms: number;
+  /** Additive local-clock observations; absent on records written before this contract. */
+  readonly attempt_started_at?: number | null;
+  readonly attempt_wall_duration_ms?: number | null;
+  readonly duration_measurement_version?: 1 | 2;
+  readonly delegation_elapsed_ms?: number | null;
+  readonly queue_duration_ms?: number | null;
+  readonly startup_duration_ms?: number | null;
+  readonly work_duration_ms?: number | null;
+  readonly seal_duration_ms?: number | null;
+  readonly runtime_duration_source?: "provider_wall" | "provider_api" | "local_span" | null;
+  readonly runtime_failure?: RuntimeFailure | null;
   readonly runtime_duration_ms: number | null;
 
   /** Total normalized input tokens. Cached categories are subdimensions, not additions. */
@@ -371,6 +395,11 @@ export interface AttemptTelemetryUpdate {
   readonly prompt_bytes?: number | null;
   readonly termination_kind?: AttemptTerminationKind;
   readonly process_exit_code?: number | null;
+  readonly queue_duration_ms?: number | null;
+  readonly startup_duration_ms?: number | null;
+  readonly work_duration_ms?: number | null;
+  readonly runtime_duration_source?: "provider_wall" | "provider_api" | "local_span" | null;
+  readonly runtime_failure?: RuntimeFailure | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -445,6 +474,10 @@ export const EventType = {
   DELEGATION_REQUESTED: "delegation.requested",
   DELEGATION_COMPLETED: "delegation.completed",
   DELEGATION_FAILED: "delegation.failed",
+  CANCELLATION_REQUESTED: "cancellation.requested",
+  LEASE_QUARANTINED: "lease.quarantined",
+  RUNTIME_STOP_CONFIRMED: "runtime.stop_confirmed",
+  OBSERVATION_INCOMPLETE: "observation.incomplete",
 } as const;
 export type EventType = (typeof EventType)[keyof typeof EventType];
 
@@ -477,8 +510,10 @@ export interface DelegationRequest {
   readonly spec: TaskSpec;
   /** Artifacts the delegate needs; explicitly NOT chat history. */
   readonly input_artifacts: readonly ArtifactId[];
-  /** Hard stop for the delegate. Prevents open-ended agent loops. */
+  /** Maximum duration of each attempt, including automatic retries. */
   readonly deadline_ms: number;
+  /** Optional elapsed-time budget shared by all retries and later recoveries. */
+  readonly total_deadline_ms?: number;
   /** Max automatic retries by the caller. Defaults to 0. */
   readonly max_attempts?: number;
   readonly idempotency_key?: string;
@@ -491,6 +526,19 @@ export interface DelegationOutcome {
   readonly error: { code: string; message: string } | null;
   readonly attempts: number;
   readonly duration_ms: number;
+  readonly observation?: ObservationStatus;
+}
+
+export interface ObservationStatus {
+  readonly status: "PENDING" | "COMPLETE" | "INCOMPLETE" | "REJECTED" | "LEGACY_UNKNOWN";
+  readonly category: "STORAGE" | "SCHEMA" | "PRIVACY" | "USAGE_UNAVAILABLE" | null;
+  readonly strict_required: boolean;
+  readonly accepted: boolean;
+  /** Local telemetry-record sealing span; excludes the enclosing business commit. */
+  readonly seal_started_at?: number | null;
+  readonly sealed_at?: number | null;
+  readonly seal_duration_ms?: number | null;
+  readonly seal_measurement_version?: 1;
 }
 
 /** Internal request derived from a caller-bound MCP session. */
@@ -524,4 +572,5 @@ export interface ResumeTaskOutcome {
   readonly deliverable: Deliverable | null;
   readonly telemetry: AttemptTelemetry | null;
   readonly error: { readonly code: ErrorCode; readonly message: string } | null;
+  readonly observation?: ObservationStatus;
 }

@@ -37,6 +37,9 @@ import {
 } from "@bridge/protocol";
 import type {
   AttemptTelemetryQuery,
+  AttemptObservation,
+  DelegationOperation,
+  ExecutionRecord,
   EventAppend,
   EventQuery,
   IdempotencyRecord,
@@ -44,6 +47,7 @@ import type {
   TaskQuery,
 } from "./state-store.js";
 import { assertSupportedNodeVersion } from "../runtime-version.js";
+import { assertSchemaVersion, inspectSchemaBeforeWrite } from "./schema-preflight.js";
 
 /**
  * `node:sqlite` is a *prefix-only* builtin: it is absent from `module.builtinModules`, so
@@ -68,7 +72,7 @@ export interface SqliteStoreOptions {
   readonly onJournalFallback?: (requested: string, actual: string, reason: string) => void;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 /** Bound concurrent native-server startup without failing immediately on schema/WAL locks. */
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -211,6 +215,28 @@ CREATE TABLE IF NOT EXISTS idempotency (
   response_json TEXT NOT NULL,
   created_at    INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS delegation_operations (
+  caller TEXT NOT NULL,
+  key TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  json TEXT NOT NULL,
+  PRIMARY KEY(caller, key)
+);
+CREATE INDEX IF NOT EXISTS idx_delegation_operations_task ON delegation_operations(task_id);
+CREATE TABLE IF NOT EXISTS task_executions (
+  task_id TEXT PRIMARY KEY,
+  agent TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_executions_agent ON task_executions(agent, phase);
+CREATE TABLE IF NOT EXISTS attempt_observations (
+  task_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  json TEXT NOT NULL,
+  PRIMARY KEY(task_id, attempt)
+);
 `;
 
 type Row = Record<string, unknown>;
@@ -225,21 +251,30 @@ export class SqliteStateStore implements StateStore {
     if (path !== ":memory:") {
       mkdirSync(dirname(path), { recursive: true });
     }
+    inspectSchemaBeforeWrite(path, SCHEMA_VERSION, DatabaseSync);
     this.db = new DatabaseSync(path);
+    try {
+    this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    const metadataExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'").get();
+    const previousVersion = metadataExists ? this.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined : undefined;
+    if (previousVersion) assertSchemaVersion(previousVersion["value"], SCHEMA_VERSION);
     // Codex and Claude each own a separate MCP stdio process and may open the same project
     // database at virtually the same instant. Schema creation and `journal_mode` briefly
     // require an exclusive lock; SQLite's default zero wait turns that harmless bootstrap
     // race into `database is locked`. Keep the wait finite so a genuinely wedged holder is
     // still surfaced rather than hanging client startup indefinitely.
-    this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     this.journalMode = this.configureJournal(path, journalMode, options.onJournalFallback);
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("PRAGMA synchronous = NORMAL");
-    this.db.exec(DDL);
-    this.migrateSchema();
-    this.db
-      .prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)")
-      .run(String(SCHEMA_VERSION));
+    this.transaction(() => {
+      const exists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'").get();
+      const version = exists ? this.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined : undefined;
+      if (version) assertSchemaVersion(version["value"], SCHEMA_VERSION);
+      this.db.exec(DDL);
+      this.migrateSchema();
+      this.db.prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)").run(String(SCHEMA_VERSION));
+    });
+    } catch (error) { this.db.close(); throw error; }
   }
 
   /** Upgrade certified v1 databases without invalidating their existing task history. */
@@ -305,12 +340,20 @@ export class SqliteStateStore implements StateStore {
   }
 
   transaction<T>(fn: () => T): T {
-    // Nested calls join the outer transaction; SQLite has no true nesting without
-    // savepoints and the control plane never needs partial rollback.
+    // Savepoints keep a failed observation seal from leaking half of its audit writes
+    // into the business-result transaction which must still commit.
     if (this.depth > 0) {
+      const name = `bridge_nested_${this.depth}`;
+      this.db.exec(`SAVEPOINT ${name}`);
       this.depth++;
       try {
-        return fn();
+        const result = fn();
+        this.db.exec(`RELEASE SAVEPOINT ${name}`);
+        return result;
+      } catch (error) {
+        this.db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+        this.db.exec(`RELEASE SAVEPOINT ${name}`);
+        throw error;
       } finally {
         this.depth--;
       }
@@ -564,7 +607,7 @@ export class SqliteStateStore implements StateStore {
 
   listHeldLeases(): Lease[] {
     const rows = this.db
-      .prepare("SELECT * FROM leases WHERE state = 'HELD' ORDER BY acquired_at ASC")
+      .prepare("SELECT * FROM leases WHERE state IN ('HELD', 'QUARANTINED') ORDER BY acquired_at ASC")
       .all() as Row[];
     return rows.map(rowToLease);
   }
@@ -727,6 +770,12 @@ export class SqliteStateStore implements StateStore {
     };
   }
 
+  updateIdempotencyResponse(record: IdempotencyRecord): void {
+    const updated = this.db.prepare("UPDATE idempotency SET response_json=? WHERE key=? AND operation=? AND request_hash=?")
+      .run(record.response_json, record.key, record.operation, record.request_hash);
+    if (updated.changes !== 1) throw new BridgeError(ErrorCode.IDEMPOTENCY_MISMATCH, "Reservation identity changed before finalization");
+  }
+
   putIdempotency(r: IdempotencyRecord): void {
     this.db
       .prepare(
@@ -734,6 +783,57 @@ export class SqliteStateStore implements StateStore {
          VALUES(?,?,?,?,?) ON CONFLICT(key) DO NOTHING`,
       )
       .run(r.key, r.operation, r.request_hash, r.response_json, r.created_at);
+  }
+
+  getDelegationOperation(caller: AgentId, key: string): DelegationOperation | undefined {
+    const row = this.db.prepare("SELECT json FROM delegation_operations WHERE caller=? AND key=?").get(caller, key) as Row | undefined;
+    return row ? JSON.parse(row["json"] as string) as DelegationOperation : undefined;
+  }
+  firstDelegationOperation(task_id: TaskId): DelegationOperation | undefined {
+    const row = this.db.prepare("SELECT json FROM delegation_operations WHERE task_id=? ORDER BY rowid LIMIT 1").get(task_id) as Row | undefined;
+    return row ? JSON.parse(String(row["json"])) as DelegationOperation : undefined;
+  }
+
+  putDelegationOperation(r: DelegationOperation): void {
+    this.db.prepare(`INSERT INTO delegation_operations(caller,key,task_id,phase,json) VALUES(?,?,?,?,?)
+      ON CONFLICT(caller,key) DO UPDATE SET phase=excluded.phase,json=excluded.json`)
+      .run(r.caller, r.key, r.task_id, r.phase, JSON.stringify(r));
+  }
+
+  getExecution(task_id: TaskId): ExecutionRecord | undefined {
+    const row = this.db.prepare("SELECT json FROM task_executions WHERE task_id=?").get(task_id) as Row | undefined;
+    return row ? JSON.parse(row["json"] as string) as ExecutionRecord : undefined;
+  }
+
+  putExecution(r: ExecutionRecord): void {
+    this.db.prepare(`INSERT INTO task_executions(task_id,agent,phase,json) VALUES(?,?,?,?)
+      ON CONFLICT(task_id) DO UPDATE SET agent=excluded.agent,phase=excluded.phase,json=excluded.json`)
+      .run(r.task_id, r.agent, r.phase, JSON.stringify(r));
+  }
+
+  listExecutions(agent?: AgentId): ExecutionRecord[] {
+    const rows = (agent === undefined
+      ? this.db.prepare("SELECT json FROM task_executions ORDER BY rowid").all()
+      : this.db.prepare("SELECT json FROM task_executions WHERE agent=? ORDER BY rowid").all(agent)) as Row[];
+    return rows.map(row => JSON.parse(row["json"] as string) as ExecutionRecord);
+  }
+
+  getObservation(task_id: TaskId, attempt: number): AttemptObservation | undefined {
+    const row = this.db.prepare("SELECT json FROM attempt_observations WHERE task_id=? AND attempt=?").get(task_id, attempt) as Row | undefined;
+    return row ? JSON.parse(row["json"] as string) as AttemptObservation : undefined;
+  }
+
+  putObservation(r: AttemptObservation): void {
+    this.db.prepare(`INSERT INTO attempt_observations(task_id,attempt,json) VALUES(?,?,?)
+      ON CONFLICT(task_id,attempt) DO UPDATE SET json=excluded.json`)
+      .run(r.task_id, r.attempt, JSON.stringify(r));
+  }
+
+  listObservations(task_id?: TaskId): AttemptObservation[] {
+    const rows = (task_id === undefined
+      ? this.db.prepare("SELECT json FROM attempt_observations ORDER BY rowid").all()
+      : this.db.prepare("SELECT json FROM attempt_observations WHERE task_id=? ORDER BY attempt").all(task_id)) as Row[];
+    return rows.map(row => JSON.parse(row["json"] as string) as AttemptObservation);
   }
 
   close(): void {

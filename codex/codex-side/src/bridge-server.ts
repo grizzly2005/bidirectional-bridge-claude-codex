@@ -65,7 +65,7 @@ export function parseBridgeServerArgs(
   let maxConcurrency = 2;
   let approvalPolicy: CodexApprovalPolicy = "never";
   let sandbox: CodexSandbox = "workspace-write";
-  let runtimeTransport: "mcp" | "app-server" = "mcp";
+  let runtimeTransport: "mcp" | "app-server" = "app-server";
   let toolPath: string | null | undefined;
   let help = false;
 
@@ -170,7 +170,7 @@ export const BRIDGE_SERVER_HELP = `bridge-codex-mcp — coordination MCP server 
   --approval-policy     untrusted | on-request | never (default: never)
   --sandbox             read-only | workspace-write | danger-full-access
                         (default: workspace-write)
-  --runtime-transport   mcp | app-server (default: mcp). App Server is the
+  --runtime-transport   mcp | app-server (default: app-server). App Server is the
                         telemetry-capable path; certified MCP remains available.
   --tool-path           exact PATH exposed to delegated shell commands
   --no-tool-path        disable automatic safe tool-PATH augmentation

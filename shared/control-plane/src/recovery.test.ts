@@ -18,7 +18,7 @@ import {
   type TaskInvocation,
   type TaskSpec,
 } from "@bridge/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { normalizeAttemptTelemetry } from "./attempt-service.js";
 import { ManualClock } from "./clock.js";
@@ -228,6 +228,78 @@ function strandExistingTask(
 }
 
 describe("stranded task recovery", () => {
+  it("cancels recovery in the shared queue without consuming a resumed attempt", async () => {
+    const { cp, orchestrator, clock, fixture } = setup(1204);
+    const { child } = createStranded(cp);
+    const blocker = cp.tasks.create({ spec: spec("disjoint/**"), created_by: "codex" });
+    cp.tasks.claim(blocker.task_id, "codex");
+    const active = cp.executions.queue(blocker.task_id, 0, "codex", 1);
+    expect(cp.executions.tryAdmit(active)).toBe(true);
+    cp.executions.update(active, { runtime_stop_confirmed: false });
+    const request = { task_id: child.task_id, requested_by: "codex", idempotency_key: "queued-recovery-cancel" };
+    const pending = orchestrator.resumeTask(request).catch(error => error);
+    for (let n = 0; n < 100 && cp.store.getExecution(child.task_id)?.phase !== "QUEUED"; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(cp.tasks.get(child.task_id).attempt).toBe(0);
+    expect(cp.attempts.list(child.task_id)).toHaveLength(1);
+    await orchestrator.cancelTask(child.task_id, "codex", 0);
+    expect((await pending).code).toBe(ErrorCode.TASK_CANCELLED);
+    expect(cp.tasks.get(child.task_id).attempt).toBe(0); expect(fixture.calls()).toBe(0);
+    expect(cp.leases.listLive()).toHaveLength(0);
+    clock.advance(1000);
+    await expect(new Orchestrator(cp).resumeTask(request)).rejects.toMatchObject({ code: ErrorCode.TASK_CANCELLED });
+    expect(cp.store.getExecution(blocker.task_id)?.runtime_stop_confirmed).toBe(false);
+    cp.close();
+  });
+  it("replays an unconfirmed native stop exactly without releasing its scope", async () => {
+    const { cp, orchestrator, clock } = setup(1201);
+    const { child } = createStranded(cp);
+    let calls = 0;
+    cp.adapters.unregister("codex");
+    cp.adapters.register({ info: { agent: "codex", implementation: "native-stop-fixture", version: "1", capabilities: ["resume", "stop-confirmation"], max_concurrency: 1 },
+      health: async () => ({ status: AdapterHealth.READY, checked_at: clock.now() }), cancel: async () => {},
+      invoke: async (invocation, ctx) => { calls++; await ctx.saveExecutionHandle(invocation.previous_execution_handle!);
+        await ctx.reportRuntimeState?.("unconfirmed");
+        throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "lost terminal notification", { runtime_stop_confirmed: false }); },
+    });
+    const request = { task_id: child.task_id, requested_by: "codex", idempotency_key: "native-stop-recovery" };
+    const first = await orchestrator.resumeTask(request);
+    expect(first.error?.code).toBe(ErrorCode.RUNTIME_STOP_UNCONFIRMED);
+    expect(first.lease_state).toBe(LeaseState.QUARANTINED);
+    clock.advance(99999);
+    expect(await new Orchestrator(cp).resumeTask(request)).toEqual(first);
+    expect(calls).toBe(1); expect(cp.leases.listLive()).toHaveLength(1);
+    cp.close();
+  });
+
+  it("replays strict observation failure without inventing a successful recovery", async () => {
+    const { cp, orchestrator, clock } = setup(1202);
+    const { child } = createStranded(cp);
+    cp.store.updateTask({ ...child, version: child.version + 1, spec: { ...child.spec, telemetry_mode: "strict" } });
+    let calls = 0;
+    cp.adapters.unregister("codex");
+    cp.adapters.register({ info: { agent: "codex", implementation: "strict-fixture", version: "1", capabilities: ["resume"], max_concurrency: 1 },
+      health: async () => ({ status: AdapterHealth.READY, checked_at: clock.now() }), cancel: async () => {},
+      invoke: async (invocation, ctx) => { calls++; await ctx.saveExecutionHandle(invocation.previous_execution_handle!); return complete(invocation, clock.now()); },
+    });
+    const request = { task_id: child.task_id, requested_by: "codex", idempotency_key: "strict-observation-recovery" };
+    const first = await orchestrator.resumeTask(request);
+    expect(first.state).toBe(TaskState.DONE); expect(first.error?.code).toBe(ErrorCode.TELEMETRY_INCOMPLETE);
+    clock.advance(1000);
+    expect(await new Orchestrator(cp).resumeTask(request)).toEqual(first);
+    expect(calls).toBe(1); cp.close();
+  });
+
+  it("resolves recovery input bytes before reserving another attempt or scope", async () => {
+    const { cp, orchestrator, fixture } = setup(1203);
+    const { child } = createStranded(cp);
+    vi.spyOn(cp.artifacts, "resolveForInvocation").mockImplementation(() => { throw new BridgeError(ErrorCode.NOT_FOUND, "input bytes unavailable"); });
+    await expect(orchestrator.resumeTask({ task_id: child.task_id, requested_by: "codex", idempotency_key: "prelaunch-input" }))
+      .rejects.toMatchObject({ code: ErrorCode.NOT_FOUND });
+    expect(cp.tasks.get(child.task_id).attempt).toBe(0);
+    expect(cp.attempts.list(child.task_id)).toHaveLength(1);
+    expect(cp.leases.listLive()).toHaveLength(0); expect(fixture.calls()).toBe(0);
+    expect(cp.store.getIdempotency("prelaunch-input")).toBeUndefined(); cp.close();
+  });
   it("1. lets the owner recover its own stranded task", async () => {
     const { cp, orchestrator, fixture } = setup(901);
     const { child } = createStranded(cp);
@@ -291,6 +363,22 @@ describe("stranded task recovery", () => {
       orchestrator.resumeTask({ task_id: child.task_id, requested_by: "codex" }),
     ).rejects.toMatchObject({ code: ErrorCode.ILLEGAL_TRANSITION });
     expect(cp.tasks.get(child.task_id).attempt).toBe(0);
+    cp.close();
+  });
+
+  it("recovers an adapter failure with its saved session, without replacing child ownership", async () => {
+    const { cp, orchestrator } = setup(990);
+    const { child } = createStranded(cp);
+    cp.attempts.end(child.task_id, 0, "codex", ErrorCode.ADAPTER_FAILURE);
+    cp.tasks.transition({ task_id: child.task_id, agent: "codex", to: TaskState.FAILED });
+    await expect(orchestrator.resumeDelegatedTask({ task_id: child.task_id, requested_by: "outsider" }))
+      .rejects.toMatchObject({ code: ErrorCode.NOT_OWNER });
+    const result = await orchestrator.resumeDelegatedTask({ task_id: child.task_id, requested_by: "claude" });
+    expect(result.owner).toBe("codex");
+    expect(result.same_execution_handle).toBe(true);
+    expect(result.recovered_attempt).toBe(1);
+    expect(cp.tasks.get(child.task_id).parent_task_id).toBe(child.parent_task_id);
+    expect(cp.leases.listLive()).toEqual([]);
     cp.close();
   });
 

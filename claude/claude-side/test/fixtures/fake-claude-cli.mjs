@@ -28,6 +28,9 @@
  */
 
 import { argv, env, stdout } from "node:process";
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const args = argv.slice(2);
 
@@ -36,6 +39,14 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const has = (name) => args.includes(name);
+
+if (has("--fixture-descendant")) {
+  // A tool process that ignores graceful termination and outlives its parent's stdio.
+  process.on("SIGTERM", () => {});
+  writeFileSync(env.FAKE_CLAUDE_CHILD_PID_FILE, String(process.pid));
+  setInterval(() => writeFileSync(env.FAKE_CLAUDE_HEARTBEAT_FILE, String(Date.now())), 25);
+  await new Promise(() => {});
+}
 
 // Record the invocation so the test can assert the argv contract.
 if (env.FAKE_CLAUDE_ARGV_FILE) {
@@ -79,11 +90,27 @@ emit({
   uuid: "2cf21c75-ea12-42d4-ac74-550b8c2e05b4",
 });
 
-if (mode === "hang") {
+if (mode === "tree" || mode === "orphan") {
+  spawn(process.execPath, [fileURLToPath(import.meta.url), "--fixture-descendant"], {
+    env, stdio: "ignore", windowsHide: true,
+  });
+  if (mode === "orphan") setTimeout(() => process.exit(0), 150);
+  else {
+    process.on("SIGTERM", () => {});
+    setInterval(() => {}, 1 << 30);
+  }
+} else if (mode === "hang") {
   // Hold stdout open forever; the adapter must terminate us on deadline or cancel.
   setInterval(() => {}, 1 << 30);
 } else if (mode === "noresult") {
   process.exit(3);
+} else if (mode === "misleading-stdout") {
+  emit({ type: "assistant", message: { model: reportedModel,
+    content: [{ type: "text", text: "Not logged in; quota exhausted is a source-code test case." }] } });
+  process.exit(3);
+} else if (mode === "quota-frame") {
+  emit({ type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } });
+  process.exit(1);
 } else if (mode === "error") {
   emit({
     is_error: true,

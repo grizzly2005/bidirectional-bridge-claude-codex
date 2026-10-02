@@ -80,6 +80,39 @@ const call = async (
 };
 
 describe("MCP tool surface", () => {
+  it("does not let a manager overwrite or read its foreign child's runtime handle", async () => {
+    const child = cp.tasks.create({ spec: spec(), created_by: "claude" });
+    cp.tasks.claim(child.task_id, "codex");
+    const result = await call("bridge_set_execution_handle", { task_id: child.task_id, execution_handle: "foreign_thread" });
+    expect(result.data.error?.code).toBe(ErrorCode.NOT_OWNER);
+    expect(cp.attempts.get(child.task_id, 0)).toBeUndefined();
+    expect((await call("bridge_get_execution_handle", { task_id: child.task_id })).data.error?.code).toBe(ErrorCode.NOT_OWNER);
+  });
+
+  it("does not rewrite the persisted handle of an already closed attempt", async () => {
+    const task = cp.tasks.create({ spec: spec(), created_by: "claude" });
+    cp.tasks.claim(task.task_id, "claude");
+    cp.attempts.saveHandle(task.task_id, 0, "claude", "original_thread");
+    cp.attempts.end(task.task_id, 0, "claude", "TIMEOUT");
+    const result = await call("bridge_set_execution_handle", { task_id: task.task_id, execution_handle: "different_thread" });
+    expect(result.data.error?.code).toBe(ErrorCode.ILLEGAL_TRANSITION);
+    expect(cp.attempts.get(task.task_id, 0)?.execution_handle).toBe("original_thread");
+  });
+  it("marks old progress stale without rewriting its historical state", async () => {
+    const created = await call("bridge_create_task", { spec: spec() });
+    const task_id = created.data.task_id as string;
+    await call("bridge_claim_task", { task_id });
+    await call("bridge_set_state", { task_id, to: "WORKING" });
+    cp.tasks.reportStatus({ task_id, agent: "claude", state: TaskState.WORKING,
+      current_action: "runtime was executing", owned_scope: spec().scope.paths,
+      progress: 0, artifacts: [], blockers: [], next_action: "finish", at: clock.now() });
+    await call("bridge_set_state", { task_id, to: "BLOCKED", reason: "turn limit" });
+    const result = await call("bridge_get_task", { task_id });
+    expect(result.data.task.state).toBe(TaskState.BLOCKED);
+    expect(result.data.latest_status.state).toBe(TaskState.WORKING);
+    expect(result.data.latest_status_is_stale).toBe(true);
+  });
+
   it("exposes every coordination primitive an agent needs", () => {
     const names = TOOLS.map((t) => t.name);
     for (const required of [
@@ -258,6 +291,14 @@ describe("MCP tool surface", () => {
     expect(cp.lastEventId()).toBe(before);
   });
 
+  it("reports same-holder scope conflicts unless the same task is supplied", async () => {
+    const task = cp.tasks.create({ spec: spec(), created_by: "claude" });
+    cp.leases.acquire({ task_id: task.task_id, holder: "claude", scope: CODEX_SCOPE, ttl_ms: 60_000 });
+    expect((await call("bridge_check_scope", { scope: CODEX_SCOPE })).data.free).toBe(false);
+    expect((await call("bridge_check_scope", { scope: CODEX_SCOPE, task_id: task.task_id })).data.free).toBe(true);
+    expect((await call("bridge_check_scope", { scope: CODEX_SCOPE, task_id: "task_0000000002" })).data.free).toBe(false);
+  });
+
   it("summarises the whole system for a supervisor in one call", async () => {
     await call("bridge_create_task", { spec: spec() });
     const snap = await call("bridge_snapshot");
@@ -274,6 +315,53 @@ describe("MCP tool surface", () => {
     const next = await call("bridge_read_events", { after: cursor });
     expect(next.data.events).toHaveLength(1);
     expect(next.data.events[0].payload.objective).toBe("second");
+  });
+
+  it.each([1, 100, 500])("pages 1001 events without loss at limit %i", async (limit) => {
+    for (let index = 0; index < 1001; index++) {
+      cp.store.appendEvent({ type: "status.reported", task_id: null, agent: "fixture", payload: { index } }, clock.now());
+    }
+    const seen: number[] = [];
+    let after = 0;
+    for (;;) {
+      const page = (await call("bridge_read_events", { after, limit })).data;
+      const events = page.events as Array<{ event_id: number }>;
+      seen.push(...events.map((event) => event.event_id));
+      expect(page.next_cursor).toBe(events.at(-1)?.event_id ?? after);
+      expect(page.head_event_id).toBe(1001);
+      expect(page.last_event_id).toBe(page.head_event_id);
+      after = page.next_cursor as number;
+      if (!page.has_more) break;
+    }
+    expect(seen).toEqual(Array.from({ length: 1001 }, (_, index) => index + 1));
+  });
+
+  it("keeps filtered cursors stable across empty pages and new appends", async () => {
+    const wanted = "task_0000000001";
+    const other = "task_0000000002";
+    const append = (task_id: string) => cp.store.appendEvent({ type: "status.reported", task_id, agent: "fixture", payload: {} }, clock.now());
+    const firstEvent = append(wanted);
+    append(other);
+    const secondEvent = append(wanted);
+    const first = (await call("bridge_read_events", { task_id: wanted, limit: 1 })).data;
+    expect(first.next_cursor).toBe(firstEvent.event_id);
+    expect(first.has_more).toBe(true);
+    append(other);
+    const thirdEvent = append(wanted);
+    const second = (await call("bridge_read_events", { task_id: wanted, limit: 1, after: first.next_cursor })).data;
+    expect(second.events).toMatchObject([{ event_id: secondEvent.event_id }]);
+    expect(second.has_more).toBe(true);
+    const third = (await call("bridge_read_events", { task_id: wanted, limit: 1, after: second.next_cursor })).data;
+    expect(third.events).toMatchObject([{ event_id: thirdEvent.event_id }]);
+    expect(third.has_more).toBe(false);
+    append(other);
+    const empty = (await call("bridge_read_events", { task_id: wanted, limit: 1, after: third.next_cursor })).data;
+    expect(empty.events).toEqual([]);
+    expect(empty.next_cursor).toBe(third.next_cursor);
+    expect(empty.has_more).toBe(false);
+    const fourthEvent = append(wanted);
+    const fourth = (await call("bridge_read_events", { task_id: wanted, limit: 1, after: empty.next_cursor })).data;
+    expect(fourth.events).toMatchObject([{ event_id: fourthEvent.event_id }]);
   });
 
   it("persists and returns an execution handle for the current attempt", async () => {

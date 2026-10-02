@@ -90,6 +90,8 @@ export interface InvocationContext {
    * writes a partial telemetry row.
    */
   reportTelemetry?(update: AttemptTelemetryUpdate): Promise<void>;
+  /** A local rejection is not stop evidence. Runtimes report their actual lifecycle. */
+  reportRuntimeState?(state: "running" | "stopped" | "unconfirmed"): Promise<void>;
   /** Aborted when the deadline passes or the task is cancelled. */
   readonly signal: AbortSignal;
 }

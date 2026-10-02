@@ -321,14 +321,14 @@ Full workflow: [docs/usage.md](docs/usage.md).
 
 - Exactly one agent **owns** a task. Claiming a task is not permission to write.
 - Before editing files, the owner acquires a **lease** over repo-relative glob patterns
-  (`*`, `**`, `?`). An overlapping live lease held by a different agent is refused with
-  `SCOPE_CONFLICT`.
+  (`*`, `**`, `?`). An overlapping lease for a distinct task is refused with
+  `SCOPE_CONFLICT`, including tasks of the same agent.
 - Overlap detection is deliberately conservative: when two patterns cannot be proven disjoint,
   the bridge reports a conflict. A false conflict costs a retry; a false clearance costs
   corrupted files.
-- Leases are time-bounded and expire lazily against an injected clock, so a crashed agent
-  cannot deadlock the repository and tests stay deterministic. Renewing a lapsed lease is
-  refused, because the scope may already belong to someone else.
+- Leases expire lazily against an injected clock. A possibly running worker retains its
+  scope in **quarantine** beyond expiry until positive stop evidence exists. Renewing a
+  lapsed lease is refused; same-task subdivision cannot bypass quarantine.
 - A read-only task declares `(no-write)/**` and returns `changed_scope: []`.
 
 These are coordination contracts enforced by the control plane. They are **not** an
@@ -349,6 +349,17 @@ caller-supplied handle nor opens a replacement task or thread.
 
 See [docs/recovery.md](docs/recovery.md).
 
+`bridge_cancel_task` requests targeted cancellation as owner or proven direct manager.
+Queued cancellation consumes no runtime attempt; active cancellation retains quarantine
+when stop is unconfirmed. `bridge_continue_task` continues the same prelaunch contention
+task with its original inputs and budget. Stable delegation and recovery keys replay their
+durable outcomes after restart; an uncertain authorized launch is never automatically repeated.
+
+Native Codex defaults to App Server for correlated turn interruption and lifecycle evidence.
+An implicit desktop model unavailable in the installed CLI uses that CLI's advertised
+default; an explicit unsupported model is refused before launch. No user configuration is
+rewritten. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
 ## Telemetry
 
 The bridge records one normalized final record per attempt: worker identity, lineage, timing,
@@ -359,6 +370,17 @@ prompts, responses, authentication data, and execution handles are outside the d
 telemetry schema.
 
 Runtime-reported cost is not confirmed billing. See [docs/telemetry.md](docs/telemetry.md).
+
+Operational mode preserves delivered work when usage is unavailable. Strict observation
+criteria are opt-in through `spec.telemetry_mode`. A typed observation receipt separates
+measurement/storage acceptance from business completion; `bridge_repair_observation` seals
+a validated stored draft without invoking the worker again.
+
+Use `bridge_doctor` for startup identity and aggregate diagnostics. The offline CLI reads
+a disposable database snapshot without migrating historical state; it cannot attest a
+loaded client or provider availability. Upgrade and rollback guidance is in
+[docs/BRIDGE_RELEASE_ROLLBACK.md](docs/BRIDGE_RELEASE_ROLLBACK.md), with implementation evidence
+in [the repair tracker](docs/SUIVI_PATCHS_BRIDGE_2026-10-01.md).
 
 ## Troubleshooting
 

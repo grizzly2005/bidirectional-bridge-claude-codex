@@ -21,7 +21,8 @@ Load this reference only when constructing an unfamiliar delegation payload or v
     "verification_criteria": [
       "The cited path exists.",
       "The reported command output is verbatim."
-    ]
+    ],
+    "telemetry_mode": "operational"
   },
   "input_artifacts": [],
   "deadline_ms": 600000,
@@ -76,3 +77,17 @@ Swap `to` for the opposite runtime. Preserve the actual root run, parent, and de
 - Each artifact uses exactly one of `path` or `inline`.
 - Preserve exact exit codes and commands. Never convert free-text claims into verification evidence.
 - Use `commit_or_diff: null` when neither exists.
+
+## Replay and observations
+
+Keep one stable key for the complete normalized delegation request, including inputs,
+lineage and budgets. Concurrent callers join one durable operation; a completed replay
+returns its frozen outcome without another invocation. A changed payload under the same
+key fails with `IDEMPOTENCY_MISMATCH`. If a process dies after launch authorization, the
+bridge reports uncertainty and fences the scope rather than automatically launching again.
+
+`outcome.deliverable` describes business work. `outcome.observation` separately reports
+measurement acceptance (`COMPLETE`, `INCOMPLETE`, `REJECTED`, or a legacy unknown status).
+Operational mode can accept useful work with unavailable usage fields. Strict mode can
+return `TELEMETRY_INCOMPLETE` even when the business task is `DONE`; repair the persisted
+observation, never repeat the business work to obtain measurements.

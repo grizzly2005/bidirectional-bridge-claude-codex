@@ -18,6 +18,7 @@ import { ArtifactRegistry } from "./artifact-registry.js";
 import { AttemptService } from "./attempt-service.js";
 import { type Clock, systemClock } from "./clock.js";
 import { DeliverableService } from "./deliverable-service.js";
+import { ExecutionService } from "./execution-service.js";
 import { LeaseManager } from "./lease-manager.js";
 import { SqliteStateStore, type JournalMode } from "./store/sqlite-store.js";
 import type { EventQuery, StateStore } from "./store/state-store.js";
@@ -46,6 +47,7 @@ export class ControlPlane {
   readonly artifacts: ArtifactRegistry;
   readonly deliverables: DeliverableService;
   readonly attempts: AttemptService;
+  readonly executions: ExecutionService;
   readonly adapters: AdapterRegistry;
   readonly workspaceRoot: string;
 
@@ -68,6 +70,7 @@ export class ControlPlane {
     );
     this.deliverables = new DeliverableService(store, this.clock, this.tasks);
     this.attempts = new AttemptService(store, this.clock);
+    this.executions = new ExecutionService(store, this.clock);
     this.adapters = new SimpleAdapterRegistry();
   }
 
@@ -132,10 +135,20 @@ export class ControlPlane {
    * silently discards another agent's work.
    */
   recover(): RecoveryReport {
+    this.executions.reconcileExecutors();
     const expired = this.leases.reapExpired();
     const now = this.clock.now();
     const stuck = this.store
-      .listTasks({ state: ["WORKING", "VERIFYING", "CLAIMED"] })
+      .listTasks({ state: ["WORKING", "VERIFYING", "CLAIMED", "FAILED"] })
+      .filter((task) => {
+        if (task.state !== "FAILED") return true;
+        try {
+          this.tasks.assertRecoverable(task);
+          return true;
+        } catch {
+          return false;
+        }
+      })
       .map((t) => ({
         task_id: t.task_id,
         owner: t.owner,

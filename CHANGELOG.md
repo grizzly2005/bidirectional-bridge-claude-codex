@@ -11,6 +11,58 @@ explicitly.
 
 ## Unreleased
 
+### Fixed
+
+- Reject overlapping leases between distinct tasks of the same holder; allow subdivision
+  only within the same task. Scope checks can accept a task identity for that exemption.
+- Add lossless event pagination through `next_cursor`, `has_more`, and `head_event_id`.
+  The deprecated `last_event_id` retains its historical global-head meaning.
+- Preserve `SCOPE_CONFLICT` on preparation failures and block without opening a runtime
+  attempt or immediately retrying contention.
+- Enforce Claude adapter concurrency with a bounded FIFO queue and isolated queued-call
+  cancellation. Add bounded Codex admission and SQLite per-agent capacity shared by server
+  processes using the same database, including quarantined workers.
+- Discover failed sessions eligible for strict recovery using existing interruption evidence.
+- Require positive correlated Codex stop evidence; unknown terminal statuses, local aborts
+  and interrupt acknowledgements never free a possibly active scope. Fence late callbacks
+  and preserve quarantine beyond expiry and same-task subdivision.
+- Persist whole-operation delegation idempotency, frozen recovery outcomes and original
+  contracts/budgets. Refuse automatic replay of abandoned authorized launches, and defer
+  recovery attempt creation until admission. Resolve input bytes before reservations.
+- Preserve completed business work independently of typed observation storage/privacy/schema
+  failures. Repair stored validated observations without invoking the worker again.
+- Classify runtime quota, authentication, transient, profile, contract and turn-limit faults;
+  retain only provider-supplied retry times and prohibit unchanged quota/auth/profile retries.
+- Consume indented Markdown fences correctly when extracting Claude's structured result;
+  other-language closing fences no longer hide real verification evidence.
+- Preserve historical database bytes when rejecting future or malformed schemas, including
+  WAL-only metadata, and make v1-v3 migrations transactional under concurrent startup.
+
+### Added
+
+- Add versioned bridge-clock attempt, queue, startup, work and separate observation-seal
+  spans without redefining cumulative legacy or provider durations.
+- Generate three client skill mirrors from `skills/using-bridge/` and verify their consistency
+  through `skills:check` and the deterministic suite.
+- Add targeted `bridge_cancel_task`, prelaunch `bridge_continue_task`, and
+  `bridge_repair_observation`, with owner/direct-manager lineage checks.
+- Add `bridge_doctor` and an offline, read-only snapshot CLI for startup/disk identity and
+  safe aggregate diagnostics without model calls or historical migrations.
+
+### Changed
+
+- **Compatibility:** native Codex now defaults to App Server; legacy MCP is explicit opt-in.
+  Unsupported implicit OpenAI desktop models use the installed CLI's advertised default;
+  explicit unsupported selections fail before launch, without changing user configuration.
+- **Persistence:** schema v4 adds durable operations, execution admission and observation
+  records. Older writers must not open the upgraded database; rollback restores a compatible
+  code/database pair. See [the release guide](docs/BRIDGE_RELEASE_ROLLBACK.md).
+
+### Documentation
+
+- Record implementation, validation and evidence limits for the October bridge analysis in
+  [the patch tracker](docs/SUIVI_PATCHS_BRIDGE_2026-10-01.md).
+
 ## 0.2.0 — 2026-08-13
 
 ### Added

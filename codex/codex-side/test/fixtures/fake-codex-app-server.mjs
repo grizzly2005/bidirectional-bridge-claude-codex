@@ -55,8 +55,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     send({
       jsonrpc: "2.0",
       id: message.id,
-      result: { thread: { id: threadId }, model: "gpt-fixture" },
+      result: { thread: { id: threadId }, model: message.params.model ?? "incompatible-desktop-model" },
     });
+    return;
+  }
+
+  if (message.method === "config/read") {
+    send({ id: message.id, result: { config: { model: "incompatible-desktop-model", model_provider: "openai" } } });
+    return;
+  }
+  if (message.method === "model/list") {
+    const response = { id: message.id, result: { data: [{ id: "gpt-fixture", model: "gpt-fixture", isDefault: true, hidden: false }], nextCursor: null } };
+    if (process.argv.includes("--slow-catalog")) setTimeout(() => send(response), 150);
+    else send(response);
     return;
   }
 

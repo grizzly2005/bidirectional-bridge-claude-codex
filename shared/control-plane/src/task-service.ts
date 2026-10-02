@@ -508,6 +508,7 @@ export class TaskService {
         ...task,
         state: TaskState.WORKING,
         attempt: input.next_attempt,
+        completed_at: undefined,
         blockers: [],
         updated_at: now,
         version: task.version + 1,
@@ -533,10 +534,29 @@ export class TaskService {
 
   /** Reject states that cannot represent an interrupted, resumable execution. */
   assertRecoverable(task: Task): void {
+    const observation = this.store.getObservation(task.task_id, task.attempt)?.telemetry
+      ?? this.store.listAttemptTelemetry({ task_id: task.task_id, attempt: task.attempt, limit: 1 })[0];
+    const failure = observation?.runtime_failure;
+    if (failure && ["profile", "contract"].includes(failure.category)) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "The runtime profile or task contract must be repaired before recovery",
+        { runtime_failure: failure });
+    }
+    if (failure?.retry_after_at != null && failure.retry_after_at > this.clock.now()) {
+      throw new BridgeError(ErrorCode.OPERATION_IN_PROGRESS, "Provider recovery time has not arrived", { retry_after_at: failure.retry_after_at });
+    }
+    // A runtime crash is not an authored terminal verdict. Permit explicit
+    // same-session recovery only with durable interruption evidence; the
+    // orchestrator still checks owner/parent authorization, lineage and leases.
+    const attempt = this.store.getAttempt(task.task_id, task.attempt);
+    const interruptedRuntime = task.state === TaskState.FAILED
+      && this.store.getDeliverable(task.task_id) === undefined
+      && attempt?.agent === task.owner && attempt?.ended_at !== undefined
+      && Boolean(attempt?.execution_handle?.trim())
+      && (attempt?.outcome === ErrorCode.ADAPTER_FAILURE || attempt?.outcome === ErrorCode.TIMEOUT);
     if (
       task.state === TaskState.PENDING ||
       task.state === TaskState.DONE ||
-      task.state === TaskState.FAILED ||
+      (task.state === TaskState.FAILED && !interruptedRuntime) ||
       task.state === TaskState.CANCELLED
     ) {
       throw new BridgeError(

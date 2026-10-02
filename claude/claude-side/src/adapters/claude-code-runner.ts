@@ -42,9 +42,10 @@
  *  - output    — a fenced JSON block parsed into a structured result
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import type { Readable } from "node:stream";
 import {
   AttemptTerminationKind,
   BridgeError,
@@ -57,6 +58,7 @@ import {
   type AttemptTelemetryUpdate,
   type ArtifactId,
   type InvocationContext,
+  type RuntimeFailure,
   type TaskInvocation,
   type VerificationResult,
 } from "@bridge/protocol";
@@ -113,9 +115,52 @@ export interface ClaudeResultFrame {
   readonly modelUsage?: Readonly<Record<string, unknown>>;
   readonly terminal_reason?: string;
   readonly permission_denials?: readonly unknown[];
+  readonly error_code?: string | number;
+  readonly api_error_status?: number | null;
+  readonly error?: { readonly code?: string | number; readonly type?: string;
+    readonly message?: string; readonly retry_after_at?: unknown };
+  readonly retry_after_at?: unknown;
 }
 
 export type ClaudeFrame = ClaudeInitFrame | ClaudeResultFrame | { type: string; [k: string]: unknown };
+
+/** Classify only a declared failing runtime frame or failed-process diagnostic, never successful prose. */
+export function classifyClaudeRuntimeFailure(
+  frame: ClaudeResultFrame | null,
+  failedProcessText?: string,
+): RuntimeFailure | null {
+  const error = typeof frame?.error === "object" && frame.error !== null ? frame.error : undefined;
+  const subtype = typeof frame?.subtype === "string" ? frame.subtype : undefined;
+  const failed = frame?.is_error === true || subtype?.startsWith("error") === true
+    || frame?.error_code !== undefined || error?.code !== undefined || error?.type !== undefined
+    || (typeof frame?.api_error_status === "number" && frame.api_error_status >= 400);
+  if (!failed && failedProcessText === undefined) return null;
+  const rawRetryAt = frame?.retry_after_at ?? error?.retry_after_at;
+  const parsedRetryAt = typeof rawRetryAt === "number" ? rawRetryAt
+    : typeof rawRetryAt === "string" && /^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/u.test(rawRetryAt)
+      ? Date.parse(rawRetryAt) : NaN;
+  const retryAfterAt = Number.isSafeInteger(parsedRetryAt) && parsedRetryAt >= 0 ? parsedRetryAt : null;
+  const codes = [frame?.error_code, error?.code, error?.type, frame?.api_error_status, subtype, frame?.terminal_reason]
+    .filter((code) => typeof code === "string" || typeof code === "number").map((code) => String(code).toLowerCase());
+  const matchCode = (pattern: RegExp): boolean => codes.some((code) => pattern.test(code));
+  let category: RuntimeFailure["category"] | undefined;
+  if (matchCode(/^(?:429|rate_limit_error|rate_limit_exceeded|quota_exceeded|usage_limit_reached|insufficient_quota|insufficient_credits|billing_error)$/u)) category = "quota";
+  else if (matchCode(/^(?:401|403|authentication_error|auth_error|unauthorized|invalid_api_key|oauth_expired)$/u)) category = "auth";
+  else if (matchCode(/^(?:408|500|502|503|504|overloaded_error|server_error|internal_server_error|connection_error|request_timeout)$/u)) category = "transient";
+  else if (matchCode(/^(?:error_max_turns|max_turns|turn_limit)$/u)) category = "turn_limit";
+  else if (matchCode(/^(?:runtime_profile_mismatch|model_mismatch|effort_mismatch)$/u)) category = "profile";
+  else if (matchCode(/^(?:invalid_request_error|invalid_argument|output_contract_error|unsupported_flag)$/u)) category = "contract";
+  if (category) return { category, source: "runtime_code", retryable: category === "transient", retry_after_at: retryAfterAt };
+  const rawText = failedProcessText ?? frame?.result ?? error?.message;
+  const text = typeof rawText === "string" ? rawText.slice(0, 16_000) : "";
+  if (/(?:not logged in|not authenticated|authentication failed|invalid api key|oauth.*(?:expired|refresh failed)|please (?:run|use) \/login)/iu.test(text)) category = "auth";
+  else if (/(?:quota (?:exceeded|exhausted)|usage limit (?:reached|exceeded)|rate limit (?:reached|exceeded)|out of credits|insufficient credits|credit balance.*(?:low|exhausted)|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:limit|usage limit))/iu.test(text)) category = "quota";
+  else if (/(?:server (?:overloaded|unavailable)|temporarily unavailable|connection (?:reset|timed out)|request timed out)/iu.test(text)) category = "transient";
+  else if (/(?:maximum (?:number of )?turns|turn limit|model profile mismatch)/iu.test(text)) category = /model profile/iu.test(text) ? "profile" : "turn_limit";
+  else if (/(?:invalid request|unsupported flag|output contract (?:invalid|violated))/iu.test(text)) category = "contract";
+  return { category: category ?? "unknown", source: category || text ? "runtime_text" : "runtime_code",
+    retryable: category === "transient", retry_after_at: retryAfterAt };
+}
 
 /**
  * Permission modes safe for unattended execution.
@@ -149,6 +194,8 @@ export interface ClaudeCodeRunnerOptions {
   readonly allowResume?: boolean;
   /** Milliseconds between SIGTERM and SIGKILL when cancelling. Default 5000. */
   readonly killGraceMs?: number;
+  /** Upper bound for proving process-tree termination, including OS inspection. */
+  readonly stopTimeoutMs?: number;
   /** Diagnostics sink. Never stdout — a launcher's stdout is the MCP transport. */
   readonly log?: (line: string) => void;
   readonly env?: NodeJS.ProcessEnv;
@@ -309,6 +356,8 @@ export interface ClaudeRunnerTelemetry {
   readonly first_output_at: number | null;
   readonly runtime_ended_at: number | null;
   readonly runtime_duration_ms: number | null;
+  readonly runtime_duration_source: AttemptTelemetryUpdate["runtime_duration_source"];
+  readonly runtime_failure: RuntimeFailure | null;
   /** `duration_api_ms` from the result frame; no neutral field exists for it. */
   readonly api_duration_ms: number | null;
   readonly usage: NormalizedClaudeUsage;
@@ -333,6 +382,8 @@ export function toTelemetryUpdate(t: ClaudeRunnerTelemetry): AttemptTelemetryUpd
     first_output_at: t.first_output_at,
     runtime_ended_at: t.runtime_ended_at,
     runtime_duration_ms: t.runtime_duration_ms,
+    runtime_duration_source: t.runtime_duration_source,
+    runtime_failure: t.runtime_failure,
     input_tokens: t.usage.input_tokens,
     output_tokens: t.usage.output_tokens,
     cached_input_tokens: t.usage.cached_input_tokens,
@@ -428,10 +479,12 @@ export function buildPrompt(invocation: TaskInvocation, resuming: boolean): stri
  */
 export function parseStructuredOutput(text: string): ClaudeStructuredOutput | null {
   if (!text) return null;
-  const fence = /```(?:json)?\s*\n([\s\S]*?)\n```/g;
+  // Consume each complete Markdown fence, including command/language examples. Otherwise
+  // an indented example's closing fence can be mistaken for the final JSON opening.
+  const fence = /^[ \t]*(`{3,})[ \t]*([^\r\n]*)\r?\n([\s\S]*?)^[ \t]*\1[ \t]*(?:\r?\n|$)/gm;
   const blocks: string[] = [];
   for (let m = fence.exec(text); m !== null; m = fence.exec(text)) {
-    if (m[1]) blocks.push(m[1]);
+    if (m[3] && ["", "json"].includes(m[2]!.trim().toLowerCase())) blocks.push(m[3]);
   }
   for (let i = blocks.length - 1; i >= 0; i--) {
     try {
@@ -539,6 +592,7 @@ async function preserveDetailedReport(text: string, ctx: InvocationContext): Pro
 
 export class ClaudeCodeRunner implements ClaudeRunner {
   readonly description: string;
+  readonly supportsStopConfirmation = true;
   private readonly options: ClaudeCodeRunnerOptions;
   private readonly command: string;
   private readonly log: (line: string) => void;
@@ -563,13 +617,20 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       options.maxTurns ?? DEFAULT_TASK_MAX_TURNS,
       "Claude default maxTurns",
     );
+    if (!Number.isSafeInteger(options.killGraceMs ?? DEFAULT_KILL_GRACE_MS)
+      || (options.killGraceMs ?? DEFAULT_KILL_GRACE_MS) < 0
+      || (options.killGraceMs ?? DEFAULT_KILL_GRACE_MS) > 30_000
+      || !Number.isSafeInteger(options.stopTimeoutMs ?? 10_000)
+      || (options.stopTimeoutMs ?? 10_000) < 1 || (options.stopTimeoutMs ?? 10_000) > 60_000) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Claude stop timeouts must be bounded non-negative milliseconds");
+    }
     this.description = `claude-code-cli(${this.command})`;
   }
 
   /** Cheap readiness probe: the binary exists and reports a version. */
   async probe(): Promise<{ ok: boolean; detail?: string }> {
     try {
-      const child = spawn(this.command, ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(this.command, ["--version"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       let out = "";
       child.stdout.on("data", (c: Buffer) => (out += c.toString()));
       let err = "";
@@ -580,6 +641,125 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     } catch (e) {
       return { ok: false, detail: (e as Error).message };
     }
+  }
+
+  /**
+   * Verify the OS-owned boundary, including tools that survived their CLI parent.
+   * POSIX children inherit an isolated process group. On Windows, taskkill /T is
+   * followed by a fresh CIM tree inspection; PID creation times prevent killing
+   * an unrelated process after PID reuse. Inspection failure is never a stop proof.
+   */
+  protected async ensureProcessTreeStopped(
+    child: ChildProcess,
+    startedAt: number,
+    closedAt: () => number | null,
+  ): Promise<boolean> {
+    if (!child.pid) return true; // failed spawn: close was emitted without a process
+    const pid = child.pid;
+    const grace = this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+    const stopDeadline = Date.now() + (this.options.stopTimeoutMs ?? grace + 10_000);
+    const command = (binary: string, args: string[]): Promise<string> => new Promise((resolve, reject) => {
+      const timeout = Math.max(1, Math.min(5_000, stopDeadline - Date.now()));
+      execFile(binary, args, { windowsHide: true, encoding: "utf8", timeout, maxBuffer: 4 * 1024 * 1024 },
+        (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+    const pause = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 40));
+    if (process.platform !== "win32") {
+      const signalGroup = (signal: NodeJS.Signals): void => {
+        try { process.kill(-pid, signal); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
+      };
+      const liveGroup = async (): Promise<boolean> => {
+        try { process.kill(-pid, 0); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+          throw error;
+        }
+        // A zombie cannot execute or write, but can retain the group until reaped.
+        const table = await command("ps", ["-eo", "pid=,pgid=,stat="]);
+        return table.split(/\r?\n/u).some((line) => {
+          const [, group, state] = line.trim().split(/\s+/u);
+          return Number(group) === pid && state !== undefined && !state.startsWith("Z");
+        });
+      };
+      try {
+        if (!await liveGroup()) return true;
+        signalGroup("SIGTERM");
+        const hardKillAt = Date.now() + grace;
+        let forced = false;
+        while (Date.now() < stopDeadline) {
+          if (!await liveGroup()) return true;
+          if (!forced && Date.now() >= hardKillAt) { signalGroup("SIGKILL"); forced = true; }
+          await pause();
+        }
+      } catch { return false; }
+      return false;
+    }
+
+    type ProcessRow = { pid: number; parent: number; born: string | null };
+    const known = new Map<number, string>();
+    const snapshot = async (): Promise<ProcessRow[]> => {
+      const script = "$ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process | ForEach-Object { "
+        + "[pscustomobject]@{pid=[int]$_.ProcessId;parent=[int]$_.ParentProcessId;born=$(if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')} else {$null})} "
+        + "}) | ConvertTo-Json -Compress";
+      const output = await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+      const parsed: unknown = JSON.parse(output);
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows.filter((row): row is ProcessRow => typeof row === "object" && row !== null
+        && Number.isSafeInteger(row.pid) && Number.isSafeInteger(row.parent));
+    };
+    const terminate = async (target: number): Promise<void> => {
+      try { await command("taskkill.exe", ["/PID", String(target), "/T", "/F"]); }
+      catch { /* exit status is not proof; the next OS snapshot decides */ }
+    };
+    try {
+      while (Date.now() < stopDeadline) {
+        const rows = await snapshot();
+        const byPid = new Map(rows.map((row) => [row.pid, row]));
+        const owned = new Set<number>();
+        const root = byPid.get(pid);
+        const isRootActive = closedAt() === null && child.exitCode === null && child.signalCode === null;
+        if (isRootActive && root) {
+          const birth = root.born === null ? NaN : Date.parse(root.born);
+          if (!Number.isFinite(birth) || Math.abs(birth - startedAt) > 2_000) return false;
+          known.set(pid, root.born!);
+          owned.add(pid);
+        }
+        for (const [knownPid, birth] of known) {
+          if (byPid.get(knownPid)?.born === birth) owned.add(knownPid);
+        }
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const row of rows) {
+            if (owned.has(row.pid) || row.pid === pid) continue;
+            const belongsToRoot = row.parent === pid;
+            const belongsToKnown = owned.has(row.parent)
+              || (known.has(row.parent) && !byPid.has(row.parent));
+            if (!belongsToRoot && !belongsToKnown) continue;
+            const birth = row.born === null ? NaN : Date.parse(row.born);
+            if (!Number.isFinite(birth)) return false;
+            // Exclude old PID lineage and children of a newly reused root PID.
+            if (birth < startedAt - 1_000 || (belongsToRoot && closedAt() !== null && birth > closedAt()!)) continue;
+            const parentBirth = belongsToRoot ? startedAt - 1_000
+              : Date.parse(known.get(row.parent) ?? byPid.get(row.parent)?.born ?? "");
+            if (Number.isFinite(parentBirth) && birth < parentBirth) continue;
+            known.set(row.pid, row.born!);
+            owned.add(row.pid);
+            changed = true;
+          }
+        }
+        if (owned.size === 0) return !isRootActive;
+        // Kill the live root first so it cannot keep launching new tools.
+        if (owned.has(pid)) await terminate(pid);
+        for (const ownedPid of owned) if (ownedPid !== pid) await terminate(ownedPid);
+        await pause();
+      }
+    } catch {
+      if (child.exitCode === null && child.signalCode === null) await terminate(pid);
+      return false;
+    }
+    return false;
   }
 
   buildArgs(invocation: TaskInvocation, prompt: string): string[] {
@@ -628,10 +808,13 @@ export class ClaudeCodeRunner implements ClaudeRunner {
   }
 
   async run(invocation: TaskInvocation, ctx: InvocationContext): Promise<ClaudeRunResult> {
+    // A rejected preflight on a resumed task must not publish the previous run's usage.
+    this.lastTelemetry.delete(invocation.task_id);
     if (
       invocation.resume_required === true &&
       (this.options.allowResume === false || !invocation.previous_execution_handle)
     ) {
+      await ctx.reportRuntimeState?.("stopped"); // validated preflight rejected before any spawn
       throw new BridgeError(
         ErrorCode.ADAPTER_FAILURE,
         "strict resume requires Claude Code resume support and a persisted session id",
@@ -639,20 +822,50 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       );
     }
     const resuming = this.options.allowResume !== false && Boolean(invocation.previous_execution_handle);
-    const prompt = buildPrompt(invocation, resuming);
-    const args = this.buildArgs(invocation, prompt);
+    let prompt: string;
+    let args: string[];
+    try { prompt = buildPrompt(invocation, resuming); args = this.buildArgs(invocation, prompt); }
+    catch (error) { await ctx.reportRuntimeState?.("stopped"); throw error; }
+
+    if (ctx.signal.aborted || invocation.deadline_at <= Date.now()) {
+      await ctx.reportRuntimeState?.("stopped");
+      return { summary: "cancelled before Claude runtime launch", blocker: "no runtime was launched" };
+    }
+    try { await ctx.reportRuntimeState?.("running"); }
+    catch (error) { await ctx.reportRuntimeState?.("stopped"); throw error; }
+    // The callback is asynchronous: cancellation may arrive while the durable state is saved.
+    if (ctx.signal.aborted || invocation.deadline_at <= Date.now()) {
+      await ctx.reportRuntimeState?.("stopped");
+      return { summary: "cancelled before Claude runtime launch", blocker: "no runtime was launched" };
+    }
 
     // stdin is "ignore", not a pipe: a non-interactive run must be structurally incapable
     // of blocking on input. That makes `stdin` null, hence the narrower child type here.
     const startedAt = Date.now();
-    const child = spawn(this.command, args, {
-      cwd: invocation.workspace_root,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: this.options.env ?? process.env,
+    let child: ChildProcessByStdio<null, Readable, Readable>;
+    try {
+      child = spawn(this.command, args, {
+        cwd: invocation.workspace_root,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: this.options.env ?? process.env,
+        windowsHide: true,
+        detached: process.platform !== "win32",
+      });
+    } catch (error) {
+      await ctx.reportRuntimeState?.("stopped"); // synchronous spawn rejection launched no process
+      throw new BridgeError(ErrorCode.ADAPTER_FAILURE, `Claude runtime launch failed: ${(error as Error).message}`,
+        { task_id: invocation.task_id });
+    }
+    let closedAt: number | null = null;
+    let launchError: Error | null = null;
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("error", (error) => { launchError = error; });
+      child.once("close", (code, signal) => { closedAt = Date.now(); resolve({ code, signal }); });
     });
 
     let sessionId: string | null = null;
     let resultFrame: ClaudeResultFrame | null = null;
+    let runtimeErrorFrame: ClaudeResultFrame | null = null;
     let stderr = "";
     let stdoutTail = "";
     let buffer = "";
@@ -664,19 +877,14 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     let model: string | null = null;
     let firstOutputAt: number | null = null;
 
-    const frames: ClaudeFrame[] = [];
-
     /* ---- bounding: deadline and cancellation both terminate the child ---- */
-
-    const killGrace = this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-    const hardKill = (): void => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    };
-    const stop = (): void => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill("SIGTERM");
-      setTimeout(hardKill, killGrace).unref?.();
-    };
+    let stopPromise: Promise<boolean> | null = null;
+    let resolveStopRequest!: (confirmed: boolean) => void;
+    const stopRequested = new Promise<boolean>((resolve) => { resolveStopRequest = resolve; });
+    const ensureStopped = (): Promise<boolean> => stopPromise ??= this.ensureProcessTreeStopped(
+      child, startedAt, () => closedAt,
+    ).catch(() => false);
+    const stop = (): void => { void ensureStopped().then(resolveStopRequest); };
 
     const remaining = invocation.deadline_at - Date.now();
     const deadlineTimer =
@@ -699,6 +907,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       stop();
     };
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    if (ctx.signal.aborted) onAbort();
 
     /* ---- stream parsing ---- */
 
@@ -710,7 +919,6 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     });
 
     const handleFrame = async (frame: ClaudeFrame): Promise<void> => {
-      frames.push(frame);
       const id = (frame as { session_id?: unknown }).session_id;
 
       // Requirement 3: persist the real session id the instant it exists. The init frame
@@ -731,8 +939,9 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       // inferred from assistant text, which is model-authored and therefore not evidence.
       if (frame.type === "system" && (frame as ClaudeInitFrame).subtype === "init") {
         const init = frame as ClaudeInitFrame;
-        runtimeVersion = init.claude_code_version ?? init.version ?? runtimeVersion;
-        model = init.model ?? model;
+        if (typeof init.claude_code_version === "string") runtimeVersion = init.claude_code_version;
+        else if (typeof init.version === "string") runtimeVersion = init.version;
+        if (typeof init.model === "string") model = init.model;
       }
 
       // First model output — not the init frame, which is emitted at startup before any
@@ -747,6 +956,10 @@ export class ClaudeCodeRunner implements ClaudeRunner {
 
       if (frame.type === "result") {
         resultFrame = frame as ClaudeResultFrame;
+      } else if (frame.type === "error") {
+        const runtimeError = (frame as { error?: ClaudeResultFrame["error"] }).error;
+        runtimeErrorFrame = { type: "result", session_id: sessionId ?? "", is_error: true, error: runtimeError,
+          result: typeof runtimeError?.message === "string" ? runtimeError.message : undefined };
       }
     };
 
@@ -764,6 +977,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
         let frame: ClaudeFrame;
         try {
           frame = JSON.parse(line) as ClaudeFrame;
+          if (frame === null || typeof frame !== "object" || typeof frame.type !== "string") continue;
         } catch {
           continue; // non-JSON noise on stdout is ignored, not fatal
         }
@@ -775,21 +989,60 @@ export class ClaudeCodeRunner implements ClaudeRunner {
 
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
+    let stopConfirmed = false;
     try {
-      const [code, signal] = (await once(child, "close")) as [number | null, NodeJS.Signals | null];
-      exitCode = code;
-      exitSignal = signal;
-      await chain; // drain any frame still being handled
+      stopConfirmed = await Promise.race([
+        closed.then(() => ensureStopped()),
+        stopRequested.then(async (treeConfirmed) => {
+          if (!treeConfirmed) return false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            // A successful kill command without close is still an unconfirmed stop.
+            return await Promise.race([closed.then(() => true), new Promise<false>((resolve) => {
+              timer = setTimeout(() => resolve(false), this.options.stopTimeoutMs ?? 10_000);
+            })]);
+          } finally { if (timer) clearTimeout(timer); }
+        }),
+      ]);
+      if (closedAt !== null) {
+        const result = await closed;
+        exitCode = result.code;
+        exitSignal = result.signal;
+      }
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       ctx.signal.removeEventListener("abort", onAbort);
     }
+    let stopStateReportFailed = false;
+    try { await ctx.reportRuntimeState?.(stopConfirmed ? "stopped" : "unconfirmed"); }
+    catch (error) {
+      if (stopConfirmed) throw error;
+      stopStateReportFailed = true;
+    }
+    if (!stopConfirmed) {
+      void chain.catch(() => {}); // remaining fenced observations cannot mask stop uncertainty
+      const observed = buildRunnerTelemetry({ frame: null, runtime_version: runtimeVersion, model,
+        started_at: startedAt, first_output_at: firstOutputAt, ended_at: Date.now(),
+        prompt_bytes: Buffer.byteLength(prompt, "utf8"), exit_code: exitCode, exit_signal: exitSignal,
+        cancelled: killedForCancel, timed_out: killedForDeadline });
+      this.lastTelemetry.set(invocation.task_id, { ...observed, runtime_ended_at: closedAt,
+        runtime_duration_ms: closedAt === null ? null : Math.max(0, closedAt - startedAt),
+        runtime_duration_source: closedAt === null ? null : "local_span" });
+      // Stop uncertainty outranks frame-drain or observation failures. In particular,
+      // never invent an ended timestamp when the root did not even emit close.
+      throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
+        "Claude process-tree termination could not be confirmed", {
+          task_id: invocation.task_id, process_id: child.pid ?? null,
+          runtime_stop_confirmed: false, runtime_state_report_failed: stopStateReportFailed,
+        });
+    }
+    await chain; // drain any frame still being handled
 
     /* ---- telemetry: what the runtime itself reported about this attempt ---- */
 
     const endedAt = Date.now();
     let telemetry = buildRunnerTelemetry({
-      frame: resultFrame,
+      frame: resultFrame ?? runtimeErrorFrame,
       runtime_version: runtimeVersion,
       model,
       started_at: startedAt,
@@ -804,10 +1057,18 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const profileMismatch =
       telemetry.model !== null && !isOpusFamilyModel(telemetry.model);
     if (profileMismatch) {
-      telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED };
+      telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED,
+        runtime_failure: { category: "profile", source: "runtime_code", retryable: false, retry_after_at: null } };
     }
+    if (!resultFrame && !runtimeErrorFrame && !killedForCancel && !killedForDeadline) telemetry = { ...telemetry,
+      runtime_failure: classifyClaudeRuntimeFailure(null, exitCode !== 0 ? stderr.trim() : "") };
     this.lastTelemetry.set(invocation.task_id, telemetry);
     const telemetryUpdate = toTelemetryUpdate(telemetry);
+
+    if (launchError) {
+      throw new BridgeError(ErrorCode.ADAPTER_FAILURE, `Claude runtime launch failed: ${(launchError as Error).message}`,
+        { task_id: invocation.task_id });
+    }
 
     /* ---- map the run onto a structured result ---- */
 
@@ -861,12 +1122,12 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const frame: ClaudeResultFrame = resultFrame;
     const text = typeof frame.result === "string" ? frame.result : "";
 
-    if (frame.is_error === true) {
+    if (telemetry.runtime_failure !== null) {
       // The runtime ran but reported failure (auth, API error, refusal). PARTIAL rather
       // than a throw: the attempt is real, the session id is persisted, and a retry can
       // resume it. Reporting COMPLETE here would be a false claim of success.
       return {
-        summary: `Claude runtime reported an error: ${text || frame.terminal_reason || "unknown"}`,
+        summary: `Claude runtime reported an error: ${text || frame.terminal_reason || telemetry.runtime_failure.category}`,
         blocker: text || frame.terminal_reason || "claude runtime error",
         remaining_risks: [
           frame.terminal_reason === "api_error"
@@ -967,11 +1228,7 @@ function terminationKind(input: BuildRunnerTelemetryInput): AttemptTerminationKi
     // it; a plain non-zero exit means it gave up on its own.
     return input.exit_signal !== null ? AttemptTerminationKind.CRASH : AttemptTerminationKind.FAILED;
   }
-  if (input.frame.is_error === true) return AttemptTerminationKind.FAILED;
-  if (typeof input.frame.subtype === "string" && input.frame.subtype.startsWith("error")) {
-    // e.g. `error_max_turns`: the runtime stopped cleanly but did not finish the task.
-    return AttemptTerminationKind.FAILED;
-  }
+  if (classifyClaudeRuntimeFailure(input.frame) !== null) return AttemptTerminationKind.FAILED;
   return AttemptTerminationKind.COMPLETED;
 }
 
@@ -995,7 +1252,8 @@ export function buildRunnerTelemetry(input: BuildRunnerTelemetryInput): ClaudeRu
   const frame = input.frame;
   const cost = count(frame?.total_cost_usd);
   const apiDuration = count(frame?.duration_api_ms);
-  const reportedDuration = count(frame?.duration_ms) ?? apiDuration;
+  const providerWallDuration = count(frame?.duration_ms);
+  const reportedDuration = providerWallDuration ?? apiDuration;
 
   return {
     runtime: CLAUDE_RUNTIME_NAME,
@@ -1009,6 +1267,9 @@ export function buildRunnerTelemetry(input: BuildRunnerTelemetryInput): ClaudeRu
     // Prefer the runtime's own figure; fall back to what this process measured, which is
     // the only number available for a run that was killed before it could report.
     runtime_duration_ms: reportedDuration ?? Math.max(0, input.ended_at - input.started_at),
+    runtime_duration_source: providerWallDuration !== null ? "provider_wall"
+      : apiDuration !== null ? "provider_api" : "local_span",
+    runtime_failure: input.cancelled || input.timed_out ? null : classifyClaudeRuntimeFailure(frame),
     api_duration_ms: apiDuration,
     usage: normalizeClaudeUsage(frame?.usage),
     turn_count: count(frame?.num_turns),

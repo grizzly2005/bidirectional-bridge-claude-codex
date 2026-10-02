@@ -19,6 +19,9 @@ import type {
   AttemptTelemetry,
   BridgeEvent,
   Deliverable,
+  DelegationOutcome,
+  DelegationRequest,
+  ObservationStatus,
   EventType,
   Lease,
   LeaseId,
@@ -69,6 +72,46 @@ export interface IdempotencyRecord {
   readonly request_hash: string;
   readonly response_json: string;
   readonly created_at: number;
+}
+
+export interface DelegationOperation {
+  readonly caller: AgentId;
+  readonly key: string;
+  readonly request_hash: string;
+  readonly task_id: TaskId;
+  readonly request: DelegationRequest;
+  readonly phase: "PREPARING" | "AUTHORIZED" | "FINISHED" | "UNCERTAIN";
+  readonly executor_id: string;
+  readonly executor_pid: number;
+  readonly started_at: number;
+  readonly updated_at: number;
+  readonly outcome: DelegationOutcome | null;
+}
+
+/** Internal generation and stop evidence. Never expose the generation as MCP authority. */
+export interface ExecutionRecord {
+  readonly task_id: TaskId;
+  readonly attempt: number;
+  readonly generation: string;
+  readonly agent: AgentId;
+  readonly phase: "QUEUED" | "RUNNING" | "STOPPED" | "QUARANTINED";
+  readonly executor_pid: number;
+  readonly max_concurrency: number;
+  readonly queued_at: number;
+  readonly queue_ticket: number;
+  readonly admitted_at: number | null;
+  readonly runtime_stop_confirmed: boolean | null;
+  readonly lease_id: LeaseId | null;
+  readonly cancel_requested_at: number | null;
+  readonly cancel_requested_by: AgentId | null;
+  readonly updated_at: number;
+}
+
+export interface AttemptObservation extends ObservationStatus {
+  readonly task_id: TaskId;
+  readonly attempt: number;
+  readonly telemetry: AttemptTelemetry | null;
+  readonly updated_at: number;
 }
 
 /**
@@ -127,6 +170,18 @@ export interface StateStore {
   // ---- idempotency ----
   getIdempotency(key: string): IdempotencyRecord | undefined;
   putIdempotency(record: IdempotencyRecord): void;
+  /** Finalize an existing reservation only if its operation and request identity match. */
+  updateIdempotencyResponse(record: IdempotencyRecord): void;
+
+  getDelegationOperation(caller: AgentId, key: string): DelegationOperation | undefined;
+  firstDelegationOperation(task_id: TaskId): DelegationOperation | undefined;
+  putDelegationOperation(record: DelegationOperation): void;
+  getExecution(task_id: TaskId): ExecutionRecord | undefined;
+  putExecution(record: ExecutionRecord): void;
+  listExecutions(agent?: AgentId): ExecutionRecord[];
+  getObservation(task_id: TaskId, attempt: number): AttemptObservation | undefined;
+  putObservation(record: AttemptObservation): void;
+  listObservations(task_id?: TaskId): AttemptObservation[];
 
   close(): void;
 }

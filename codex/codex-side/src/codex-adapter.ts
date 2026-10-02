@@ -19,13 +19,13 @@ import {
 } from "@bridge/protocol";
 
 import {
-  CodexMcpProcessClient,
   buildDefaultCodexToolPath,
   type CodexApprovalPolicy,
   type CodexMcpClient,
   type CodexMcpResponse,
   type CodexSandbox,
 } from "./codex-mcp-client.js";
+import { CodexAppServerProcessClient } from "./codex-app-server-client.js";
 import {
   CODEX_DEVELOPER_INSTRUCTIONS,
   buildRepairPrompt,
@@ -42,6 +42,7 @@ export interface CodexAdapterOptions {
   readonly approval_policy?: CodexApprovalPolicy;
   readonly sandbox?: CodexSandbox;
   readonly max_concurrency?: number;
+  readonly max_pending_invocations?: number;
   readonly max_structure_repairs?: number;
   readonly max_idempotency_entries?: number;
   /** Exact PATH for delegated shell tools. `null` disables the safe automatic PATH layer. */
@@ -90,6 +91,8 @@ function mergeRuntimeTelemetry(
   for (const field of ["runtime", "runtime_version", "model"] as const) {
     if (incoming[field] !== undefined) target[field] = incoming[field];
   }
+  if (incoming.runtime_duration_source !== undefined) target.runtime_duration_source = incoming.runtime_duration_source;
+  if (incoming.runtime_failure !== undefined) target.runtime_failure = incoming.runtime_failure;
   if (incoming.runtime_started_at !== undefined) {
     target.runtime_started_at =
       incoming.runtime_started_at === null
@@ -202,7 +205,7 @@ class AsyncSemaphore {
   private active = 0;
   private readonly waiters: Waiter[] = [];
 
-  constructor(private readonly limit: number) {}
+  constructor(private readonly limit: number, private readonly maxPending: number) {}
 
   acquire(signal: AbortSignal): Promise<() => void> {
     if (signal.aborted) return Promise.reject(abortError("semaphore wait aborted"));
@@ -211,6 +214,8 @@ class AsyncSemaphore {
       return Promise.resolve(this.releaseHandle());
     }
 
+    if (this.waiters.length >= this.maxPending) return Promise.reject(new BridgeError(ErrorCode.ADAPTER_FAILURE,
+      "Codex adapter admission queue is full", { runtime_stop_confirmed: true }));
     return new Promise<() => void>((resolve, reject) => {
       let waiter: Waiter;
       const onAbort = (): void => {
@@ -286,7 +291,7 @@ function reasonText(reason: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Production AgentAdapter backed by the official `codex mcp-server` tools. */
+/** Production AgentAdapter backed by the official App Server by default. */
 export class CodexAdapter implements AgentAdapter {
   readonly info: AdapterInfo;
 
@@ -308,7 +313,10 @@ export class CodexAdapter implements AgentAdapter {
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
       throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "max_concurrency must be >= 1");
     }
-    this.client = options.client ?? new CodexMcpProcessClient();
+    const maxPending = options.max_pending_invocations ?? 64;
+    if (!Number.isInteger(maxPending) || maxPending < 0) throw new BridgeError(ErrorCode.INVALID_ARGUMENT,
+      "max_pending_invocations must be a non-negative integer");
+    this.client = options.client ?? new CodexAppServerProcessClient();
     this.model = options.model;
     this.approvalPolicy = options.approval_policy ?? "never";
     this.sandbox = options.sandbox ?? "workspace-write";
@@ -336,19 +344,20 @@ export class CodexAdapter implements AgentAdapter {
       throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "tool_path must be non-empty or null");
     }
     this.now = options.now ?? Date.now;
-    this.semaphore = new AsyncSemaphore(maxConcurrency);
+    this.semaphore = new AsyncSemaphore(maxConcurrency, maxPending);
     this.info = {
       agent: "codex",
-      implementation: options.implementation ?? "official-codex-cli-mcp",
+      implementation: options.implementation ?? (this.client instanceof CodexAppServerProcessClient ? "official-codex-app-server" : "injected-codex-client"),
       version: "0.1.0",
       capabilities: [
+        ...(this.client.supportsStopConfirmation ? ["stop-confirmation"] : []),
         "code",
         "tests",
         "shell",
         "mcp",
         "resume",
         "structured-deliverable",
-        ...(options.implementation === "official-codex-app-server" ? ["token-usage"] : []),
+        ...(options.implementation === "official-codex-app-server" || this.client instanceof CodexAppServerProcessClient ? ["token-usage"] : []),
       ],
       max_concurrency: maxConcurrency,
     };
@@ -500,6 +509,13 @@ export class CodexAdapter implements AgentAdapter {
     const published: ArtifactId[] = [];
     const recorded: VerificationResult[] = [];
     const runtimeTelemetry: MutableTelemetryUpdate = {};
+    let runtimeLaunched = false;
+    let runtimeStopConfirmed = false;
+    let primaryError: unknown;
+    const transportContext: InvocationContext = { ...ctx, reportRuntimeState: async state => {
+      runtimeStopConfirmed = state === "stopped";
+      await ctx.reportRuntimeState?.(state);
+    } };
 
     try {
       release = await this.semaphore.acquire(controller.signal);
@@ -513,13 +529,16 @@ export class CodexAdapter implements AgentAdapter {
         next_action: "Collect Codex result and validate the structured deliverable",
       });
 
-      const first = await this.startOrResume(invocation, ctx, controller.signal);
+      runtimeLaunched = true;
+      const first = await this.startOrResume(invocation, transportContext, controller.signal);
+      runtimeStopConfirmed = true;
+      await ctx.reportRuntimeState?.("stopped");
       mergeRuntimeTelemetry(runtimeTelemetry, first.telemetry);
 
       const parsed = await this.parseWithBoundedRepair(
         first,
         invocation,
-        ctx,
+        transportContext,
         controller.signal,
         (response) => mergeRuntimeTelemetry(runtimeTelemetry, response.telemetry),
       );
@@ -575,6 +594,18 @@ export class CodexAdapter implements AgentAdapter {
       });
       return deliverable;
     } catch (error) {
+      primaryError = error;
+      if (error instanceof BridgeError && typeof error.details["runtime_telemetry"] === "object" && error.details["runtime_telemetry"] !== null) {
+        mergeRuntimeTelemetry(runtimeTelemetry, error.details["runtime_telemetry"] as AttemptTelemetryUpdate);
+      }
+      if (error instanceof BridgeError && error.details["runtime_failure"] !== undefined) {
+        runtimeTelemetry.runtime_failure = error.details["runtime_failure"] as NonNullable<AttemptTelemetryUpdate["runtime_failure"]>;
+      }
+      const confirmed = !runtimeLaunched || runtimeStopConfirmed || (error instanceof BridgeError && error.details["runtime_stop_confirmed"] === true)
+        || !this.client.supportsStopConfirmation;
+      await ctx.reportRuntimeState?.(confirmed ? "stopped" : "unconfirmed");
+      if (!confirmed) throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "Codex transport did not confirm that the runtime stopped",
+        { runtime_stop_confirmed: false, original_code: error instanceof BridgeError ? error.code : ErrorCode.ADAPTER_FAILURE });
       const timedOut =
         deadlineReached ||
         controller.signal.aborted ||
@@ -593,12 +624,16 @@ export class CodexAdapter implements AgentAdapter {
             cause: error instanceof Error ? error.message : String(error),
           });
     } finally {
-      await ctx.reportTelemetry?.(runtimeTelemetry);
-      if (timer !== undefined) clearTimeout(timer);
-      ctx.signal.removeEventListener("abort", onParentAbort);
-      release?.();
-      const current = this.activeByTask.get(invocation.task_id);
-      if (current === active) this.activeByTask.delete(invocation.task_id);
+      try {
+        try { await ctx.reportTelemetry?.(runtimeTelemetry); }
+        catch (error) { if (primaryError === undefined) throw error; }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        ctx.signal.removeEventListener("abort", onParentAbort);
+        release?.();
+        const current = this.activeByTask.get(invocation.task_id);
+        if (current === active) this.activeByTask.delete(invocation.task_id);
+      }
     }
   }
 
@@ -631,9 +666,12 @@ export class CodexAdapter implements AgentAdapter {
         const previousThreadId = response.thread_id;
         response = await this.client.reply({
           thread_id: response.thread_id,
+          cwd: invocation.workspace_root,
           prompt: buildRepairPrompt(error),
           timeout_ms: this.remainingMs(invocation),
           signal,
+          telemetry_mode: "operational",
+          on_runtime_state: ctx.reportRuntimeState,
         });
         onResponse(response);
         if (response.thread_id !== previousThreadId) {
@@ -668,9 +706,12 @@ export class CodexAdapter implements AgentAdapter {
         let handleSaved = false;
         const resumed = await this.client.reply({
           thread_id: previousHandle,
+          cwd: invocation.workspace_root,
           prompt: buildResumePrompt(invocation),
           timeout_ms: this.remainingMs(invocation),
           signal,
+          telemetry_mode: "operational",
+          on_runtime_state: ctx.reportRuntimeState,
           on_execution_handle: async (threadId) => {
             await ctx.saveExecutionHandle(threadId);
             handleSaved = true;
@@ -718,6 +759,8 @@ export class CodexAdapter implements AgentAdapter {
       developer_instructions: CODEX_DEVELOPER_INSTRUCTIONS,
       timeout_ms: this.remainingMs(invocation),
       signal,
+      telemetry_mode: "operational",
+      on_runtime_state: ctx.reportRuntimeState,
       on_execution_handle: async (threadId) => {
         await ctx.saveExecutionHandle(threadId);
         handleSaved = true;
