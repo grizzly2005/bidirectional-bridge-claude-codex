@@ -16,7 +16,7 @@
   "dependencies": {
     "@bridge/control-plane": "0.3.1",
     "@bridge/protocol": "0.3.1",
-    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/ext-apps": "2.0.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.76"
   }
