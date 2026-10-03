@@ -33,7 +33,7 @@
   "dependencies": {
     "@bridge/mcp-server-core": "0.3.0",
     "@bridge/protocol": "0.3.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@openai/codex": "^0.147.0"
   }
 }
