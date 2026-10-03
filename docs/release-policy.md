@@ -82,7 +82,7 @@ workflow never moves a tag or overwrites a published release.
 Repository security configuration is checked separately: secret scanning and push
 protection, dependency alerts/security updates and private vulnerability reporting. These
 controls and GitHub's community profile are maintenance checks, not a legal or security
-compliance certification. See [v0.3.0 installation notes](releases/v0.3.0.md).
+compliance certification. See [v0.3.1 installation notes](releases/v0.3.1.md).
 
 ## Claim discipline
 
