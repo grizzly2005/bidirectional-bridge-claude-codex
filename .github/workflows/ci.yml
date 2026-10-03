@@ -40,6 +40,8 @@ jobs:
       - run: npm audit --audit-level=low
       - if: runner.os == 'Linux'
         run: npm run test:tracking-permissions
+      - if: runner.os == 'Linux'
+        run: python3 scripts/test-release-package.py
       - run: npx playwright install --with-deps chromium
       - run: npm run test:tracking-ui
         env:

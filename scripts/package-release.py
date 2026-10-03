@@ -31,6 +31,11 @@ def safe_name(name):
         raise ValueError("unsafe archive member")
 
 
+def private_path(text):
+    # A drive prefix must start a value/token: the trailing 's:/' in 'https://' is a URL.
+    return re.search(r'(?:^|[\s"(=])(?:[A-Za-z]:[\\/]|/home/|/Users/|/mnt/[a-z]/Users/)', text) is not None
+
+
 def archive(destination, prefix, entries, timestamp):
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as target:
         for name, (data, mode) in sorted(entries.items()):
@@ -129,7 +134,7 @@ def main():
     archive(output / ("using-bridge-" + version + ".zip"), "using-bridge/", skill, timestamp)
     sbom = json.loads(pathlib.Path(args.sbom).read_text(encoding="utf-8-sig"))
     sbom_text = json.dumps(sbom, indent=2, sort_keys=True) + "\n"
-    if re.search(r"(?:[A-Za-z]:[\\/]|/home/|/Users/|/mnt/[a-z]/Users/)", sbom_text):
+    if private_path(sbom_text):
         raise ValueError("dependency inventory contains a local absolute path")
     (output / "SBOM.cdx.json").write_text(sbom_text, encoding="utf8", newline="\n")
     (output / "RELEASE.json").write_bytes(encoded)

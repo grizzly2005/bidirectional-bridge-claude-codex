@@ -242,18 +242,24 @@ CREATE TABLE IF NOT EXISTS attempt_observations (
 type Row = Record<string, unknown>;
 
 export class SqliteStateStore implements StateStore {
-  private readonly db: DatabaseSync;
+  private readonly db!: DatabaseSync;
   private depth = 0;
-  readonly journalMode: string;
+  readonly journalMode!: string;
 
   constructor(options: SqliteStoreOptions) {
     const { path, journalMode = "auto" } = options;
     if (path !== ":memory:") {
       mkdirSync(dirname(path), { recursive: true });
     }
-    inspectSchemaBeforeWrite(path, SCHEMA_VERSION, DatabaseSync);
-    this.db = new DatabaseSync(path);
-    try {
+    // A connection opened while another startup changes WAL state can retain a read-only
+    // pager on Windows, even though the requested connection is writable. Reopen once,
+    // after closing/rolling back the failed connection and repeating schema preflight.
+    // Persistent read-only permissions still fail; no chmod, sidecar deletion or fallback
+    // to a different database is attempted.
+    for (let startup = 0; startup < 2; startup++) {
+      inspectSchemaBeforeWrite(path, SCHEMA_VERSION, DatabaseSync);
+      this.db = new DatabaseSync(path);
+      try {
     this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     const metadataExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta'").get();
     const previousVersion = metadataExists ? this.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined : undefined;
@@ -277,7 +283,19 @@ export class SqliteStateStore implements StateStore {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_run_created ON tasks(run_id, created_at, task_id); CREATE INDEX IF NOT EXISTS idx_tasks_roots_created ON tasks(created_at DESC, task_id DESC) WHERE parent_task_id IS NULL; CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);");
       this.db.prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)").run(String(SCHEMA_VERSION));
     });
-    } catch (error) { this.db.close(); throw error; }
+        return;
+      } catch (error) {
+        this.db.close();
+        const sqlite = error as { code?: string; errcode?: number };
+        if (startup === 0 && path !== ":memory:" && journalMode !== "DELETE" &&
+            sqlite.code === "ERR_SQLITE_ERROR" && typeof sqlite.errcode === "number" &&
+            (sqlite.errcode & 0xff) === 8) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   /** Upgrade certified v1 databases without invalidating their existing task history. */

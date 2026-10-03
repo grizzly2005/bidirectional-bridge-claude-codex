@@ -197,6 +197,7 @@
     "scripts/package-release.py",
     "scripts/repair-workspace-links.mjs",
     "scripts/sync-bridge-skill.mjs",
+    "scripts/test-release-package.py",
     "scripts/test-tracking-permissions.mjs",
     "scripts/test-tracking-ui.mjs",
     "scripts/tracking-ui-entry.mjs",

@@ -52,6 +52,7 @@ jobs:
       - run: node scripts/certification-manifest.mjs
       - run: npm audit --audit-level=low
       - run: npm run test:tracking-permissions
+      - run: python3 scripts/test-release-package.py
       - run: npx playwright install --with-deps chromium
       - run: npm run test:tracking-ui
       - run: git diff --exit-code

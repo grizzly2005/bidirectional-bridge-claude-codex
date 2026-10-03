@@ -41,6 +41,8 @@ No changes recorded yet.
   other-language closing fences no longer hide real verification evidence.
 - Preserve historical database bytes when rejecting future or malformed schemas, including
   WAL-only metadata, and make v1-v3 migrations transactional under concurrent startup.
+- Reopen a failed writable startup once after SQLite reports a read-only pager during
+  concurrent WAL initialization; repeat schema preflight and preserve persistent failures.
 
 ### Added
 

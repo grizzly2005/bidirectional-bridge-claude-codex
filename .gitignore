@@ -4,6 +4,8 @@ dist/
 build/
 coverage/
 *.tsbuildinfo
+__pycache__/
+*.pyc
 /vitest.config.ts.timestamp-*.mjs
 
 # Bridge and SQLite runtime state
