@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run skills:check
+      - run: npm run links:check
+      - run: node docs/tools/check-doc-links.mjs
+      - run: node scripts/certification-manifest.mjs
+      - run: npm audit --audit-level=low
+      - if: runner.os == 'Linux'
+        run: npm run test:tracking-permissions
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:tracking-ui
+        env:
+          BRIDGE_TEST_BROWSER_CHANNEL: chromium
+      - run: git diff --exit-code

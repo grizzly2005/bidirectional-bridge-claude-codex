@@ -40,7 +40,7 @@ async function browser() {
 }
 
 async function embedded() {
-  const app = new App({ name: "Bridge delegation tracking", version: "0.2.0" }, {});
+  const app = new App({ name: "Bridge delegation tracking", version: __BRIDGE_VERSION__ }, {});
   const call = async (name, args) => {
     if (!allowed.has(name)) throw error("TOOL_NOT_ALLOWED");
     const result = await app.callServerTool({ name, arguments: args });

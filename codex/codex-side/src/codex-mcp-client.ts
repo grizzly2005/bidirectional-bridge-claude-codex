@@ -9,6 +9,7 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  BRIDGE_VERSION,
   BridgeError,
   ErrorCode,
   type AttemptTelemetryUpdate,
@@ -547,7 +548,7 @@ export class CodexMcpProcessClient implements CodexMcpClient {
       this.appendStderr(String(chunk));
     });
     const client = new Client(
-      { name: "bridge-codex-side", version: "0.1.0" },
+      { name: "bridge-codex-side", version: BRIDGE_VERSION },
       { capabilities: {} },
     );
 

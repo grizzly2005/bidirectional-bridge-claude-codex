@@ -20,6 +20,7 @@
  */
 
 import {
+  BRIDGE_VERSION,
   AdapterHealth,
   BridgeError,
   DeliverableStatus,
@@ -200,7 +201,7 @@ export class ClaudeAdapter implements AgentAdapter {
     this.info = {
       agent: options.agent ?? "claude",
       implementation: `claude-adapter(${options.runner.description})`,
-      version: "0.1.0",
+      version: BRIDGE_VERSION,
       capabilities: [...new Set([
         ...(options.capabilities ?? ["code", "tests", "docs", "review", "analysis", "resume"]),
         ...(this.runner.supportsStopConfirmation === true ? ["stop-confirmation"] : []),

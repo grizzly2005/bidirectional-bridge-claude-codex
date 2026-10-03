@@ -15,3 +15,6 @@ export * from "./adapter.js";
 
 /** Bumped when a breaking change lands in the wire contract. */
 export const PROTOCOL_VERSION = "1.3.0";
+
+/** Release identity; separate from the wire protocol and persisted schema versions. */
+export const BRIDGE_VERSION = "0.3.0";

@@ -63,6 +63,7 @@ try {
 
   const launch = { headless: true };
   if (process.env.BRIDGE_TEST_BROWSER_EXECUTABLE) launch.executablePath = process.env.BRIDGE_TEST_BROWSER_EXECUTABLE;
+  else if (process.env.BRIDGE_TEST_BROWSER_CHANNEL) launch.channel = process.env.BRIDGE_TEST_BROWSER_CHANNEL;
   else if (process.platform === "win32") launch.channel = "msedge";
   browser = await chromium.launch(launch);
   const context = await browser.newContext({ viewport: { width: 1100, height: 850 }, reducedMotion: "reduce" });

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { BRIDGE_VERSION } from "@bridge/protocol";
 import { TrackingCoordinator, type TrackingOptions } from "./tracking.js";
 import { TrackingHttpServer } from "./tracking-http.js";
 import { registerTracking, TRACKING_TOOL_NAMES } from "./tracking-tools.js";
@@ -15,7 +16,7 @@ export class TrackingMcpServer {
   constructor(options: TrackingOptions) {
     this.tracking = new TrackingCoordinator(options);
     this.browser = new TrackingHttpServer(this.tracking);
-    this.mcp = new McpServer({ name: "bridge-tracking-observer", version: "0.2.0" },
+    this.mcp = new McpServer({ name: "bridge-tracking-observer", version: BRIDGE_VERSION },
       { instructions: "Read-only bridge observation. Activate bridge_tracking_open on explicit request. Closing the view does not cancel tasks. This server cannot delegate, recover, resume or mutate bridge tasks." });
     registerTracking(this.mcp, this.tracking, this.browser);
   }

@@ -11,6 +11,10 @@ explicitly.
 
 ## Unreleased
 
+No changes recorded yet.
+
+## 0.3.0 — 2026-10-03
+
 ### Fixed
 
 - Reject overlapping leases between distinct tasks of the same holder; allow subdivision
@@ -55,12 +59,17 @@ explicitly.
   `bridge_repair_observation`, with owner/direct-manager lineage checks.
 - Add `bridge_doctor` and an offline, read-only snapshot CLI for startup/disk identity and
   safe aggregate diagnostics without model calls or historical migrations.
+- Add Linux/Windows GitHub Actions validation and a manually dispatched release workflow
+  that creates source, compiled, skill, SHA-256 and CycloneDX dependency assets in a draft.
+- Add a root security policy, community conduct, issue/PR templates and Dependabot updates.
 
 ### Changed
 
 - Build a bundled self-contained tracking resource and synchronize opt-in guidance across
   all three client skill mirrors. Upgrade the compatible test runner and patched transitive
   dependencies; keep MCP Apps SDK1.7.5 compatible with the existing MCP SDK1.x/Zod3 stack.
+- Align all workspace packages, internal dependencies and runtime release identities on
+  `0.3.0`; keep protocol version `1.3.0` and persisted schema version `4` distinct.
 
 - **Compatibility:** native Codex now defaults to App Server; legacy MCP is explicit opt-in.
   Unsupported implicit OpenAI desktop models use the installed CLI's advertised default;
@@ -73,6 +82,8 @@ explicitly.
 
 - Record implementation, validation and evidence limits for the October bridge analysis in
   [the patch tracker](docs/SUIVI_PATCHS_BRIDGE_2026-10-01.md).
+- Document downloadable release installation, dependency provenance, private tracking setup
+  and the requirement to reload already-running MCP clients.
 
 ## 0.2.0 — 2026-08-13
 

@@ -14,6 +14,11 @@ launcher arguments may change between revisions; see [release-policy.md](release
 
 ## Install and verify
 
+For an immutable downloadable checkpoint, follow [the v0.3.0 release instructions](releases/v0.3.0.md).
+The compiled archive contains the same public source and lockfile plus generated workspace
+distributions and the bundled tracking resource. Dependencies are installed locally with
+`npm ci`; they are not copied from a publisher's `node_modules`.
+
 From the repository root, the deterministic workflow is:
 
 ```bash

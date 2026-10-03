@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible bridge failure without private runtime data.
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, use private security reporting. Do not attach databases, credentials, prompts, transcripts, handles or trust state."
+  - type: input
+    id: revision
+    attributes:
+      label: Release or full commit SHA, OS and Node version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Redacted reproduction
+      description: Include the exact command or tool call, stable error code and real exit code.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+    validations:
+      required: true

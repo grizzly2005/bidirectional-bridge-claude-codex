@@ -1,6 +1,6 @@
 {
   "name": "@bridge/mcp-server-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -14,8 +14,8 @@
     }
   },
   "dependencies": {
-    "@bridge/control-plane": "0.2.0",
-    "@bridge/protocol": "0.2.0",
+    "@bridge/control-plane": "0.3.0",
+    "@bridge/protocol": "0.3.0",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.76"

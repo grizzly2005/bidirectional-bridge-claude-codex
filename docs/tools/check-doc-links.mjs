@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-const ROOT_FILES = ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md'];
+const ROOT_FILES = ['README.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', '.github/pull_request_template.md'];
 const DOC_DIRS = ['docs'];
 
 const LINK_RE = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;

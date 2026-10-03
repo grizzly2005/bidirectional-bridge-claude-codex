@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const launcherPath = fileURLToPath(import.meta.url);
 export const nativeBridgeRepositoryRoot = resolve(dirname(launcherPath), "..");
+const bridgeVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 const CALLERS = new Set(["codex", "claude"]);
 const DELEGATION_POLICIES = new Set(["allow", "deny"]);
@@ -103,7 +104,7 @@ export async function runNativeBridge(args) {
 
   const diagnostics = await import(new URL("../shared/mcp-server-core/dist/diagnostics.js", import.meta.url).href);
   const startupIdentity = diagnostics.captureBridgeIdentity({ repositoryRoot: nativeBridgeRepositoryRoot,
-    entrypointPath: launcherPath, serverName: "bridge-native-project", serverVersion: "0.1.0" });
+    entrypointPath: launcherPath, serverName: "bridge-native-project", serverVersion: bridgeVersion });
   const [core, claudeSide, codexSide] = await Promise.all([
     import(new URL("../shared/mcp-server-core/dist/index.js", import.meta.url).href),
     import(new URL("../claude/claude-side/dist/index.js", import.meta.url).href),

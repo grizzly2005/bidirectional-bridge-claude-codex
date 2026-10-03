@@ -1,0 +1,78 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag (for example v0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate requested tag
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify annotated tag and package identity
+        run: |
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          node -e 'if ("v" + JSON.parse(require("fs").readFileSync("package.json")).version !== process.env.RELEASE_TAG) process.exit(1)'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run skills:check
+      - run: npm run links:check
+      - run: node docs/tools/check-doc-links.mjs
+      - run: node scripts/certification-manifest.mjs
+      - run: npm audit --audit-level=low
+      - run: npm run test:tracking-permissions
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:tracking-ui
+      - run: git diff --exit-code
+      - name: Create source, compiled distribution, skill and dependency inventory
+        run: |
+          mkdir -p tmp/release-assets
+          npm sbom --sbom-format cyclonedx --omit dev --workspaces --include-workspace-root > tmp/release-sbom.json
+          python3 scripts/package-release.py --sbom tmp/release-sbom.json --output tmp/release-assets
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: tmp/release-assets/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ inputs.tag }}
+          path: tmp/release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Create draft with all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" tmp/release-assets/* --draft --verify-tag \
+            --title "$RELEASE_TAG - Durable execution and delegation tracking" \
+            --notes-file "docs/releases/$RELEASE_TAG.md"

@@ -1,7 +1,7 @@
 # Claude Code ↔ Codex coordination bridge
 
 > **Status: Experimental · Pre-1.0 · under active development · not production-certified.**
-> This is the first experimental open-source release. APIs, MCP tool shapes, persisted state,
+> This is an experimental open-source project. APIs, MCP tool shapes, persisted state,
 > and workflows may change without notice and without a migration path. Use it only in
 > trusted local repositories on work you can review.
 
@@ -12,6 +12,10 @@ and runtime telemetry, exposed to each client as a native project-scoped MCP ser
 
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
+
+The current checkpoint is [v0.3.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.0).
+See the [release notes](docs/releases/v0.3.0.md) for durable execution, schema-v4 migration,
+opt-in delegation tracking, downloads and verification.
 
 ## Table of contents
 

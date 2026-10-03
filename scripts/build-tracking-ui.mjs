@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const { version } = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 const result = await build({ absWorkingDir: root, entryPoints: ["scripts/tracking-ui-entry.mjs"], bundle: true,
   write: false, format: "iife", platform: "browser", target: ["es2022"], minify: true, legalComments: "inline",
+  define: { __BRIDGE_VERSION__: JSON.stringify(version) },
   // The SDK's development transport logs full frames. No protocol data belongs in logs.
   drop: ["console", "debugger"] });
 const script = result.outputFiles[0].text.replace(/<\/script/giu, "<\\/script");

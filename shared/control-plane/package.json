@@ -1,14 +1,19 @@
 {
   "name": "@bridge/control-plane",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
   "description": "Shared control plane: task lifecycle, ownership, write-scope leases, dependencies, artifacts, append-only event log.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "dependencies": {
-    "@bridge/protocol": "0.2.0"
+    "@bridge/protocol": "0.3.0"
   }
 }

@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  BRIDGE_VERSION,
   AttemptTerminationKind,
   BridgeError,
   ErrorCode,
@@ -726,7 +727,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
       await this.request(
         "initialize",
         {
-          clientInfo: { name: "bridge-codex-telemetry", version: "0.1.0" },
+          clientInfo: { name: "bridge-codex-telemetry", version: BRIDGE_VERSION },
           capabilities: { experimentalApi: true },
         },
         this.options.connect_timeout_ms,

@@ -1,13 +1,18 @@
 {
   "name": "@bridge/claude-side",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "type": "module",
   "description": "Claude-specific bridge integration: Claude adapter, work session, and the Claude launcher. The generic MCP server lives in @bridge/mcp-server-core.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "bin": {
     "bridge-mcp": "./dist/server/main.js"
   },
@@ -16,8 +21,8 @@
     "live:telemetry": "node scripts/live-claude-telemetry.mjs"
   },
   "dependencies": {
-    "@bridge/control-plane": "0.2.0",
-    "@bridge/mcp-server-core": "0.2.0",
-    "@bridge/protocol": "0.2.0"
+    "@bridge/control-plane": "0.3.0",
+    "@bridge/mcp-server-core": "0.3.0",
+    "@bridge/protocol": "0.3.0"
   }
 }

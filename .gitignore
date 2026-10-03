@@ -39,6 +39,7 @@ coverage/
 tmp/
 temp/
 scratch/
+/output/
 
 # Credentials and private key containers
 .env

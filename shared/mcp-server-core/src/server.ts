@@ -15,6 +15,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ControlPlane, Orchestrator } from "@bridge/control-plane";
 import type { AgentAdapter, AgentId } from "@bridge/protocol";
+import { BRIDGE_VERSION } from "@bridge/protocol";
 import type { BridgeProcessIdentity } from "./diagnostics.js";
 import { TrackingCoordinator } from "./tracking.js";
 import { TrackingHttpServer } from "./tracking-http.js";
@@ -107,7 +108,7 @@ export class BridgeMcpServer {
     this.server = new McpServer(
       {
         name: options.serverName ?? "bridge-coordination",
-        version: options.serverVersion ?? "0.1.0",
+        version: options.serverVersion ?? BRIDGE_VERSION,
       },
       { instructions: options.instructions ?? DEFAULT_SERVER_INSTRUCTIONS },
     );

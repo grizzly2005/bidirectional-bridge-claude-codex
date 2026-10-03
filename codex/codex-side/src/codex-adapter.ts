@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  BRIDGE_VERSION,
   AdapterHealth,
   BridgeError,
   DeliverableStatus,
@@ -348,7 +349,7 @@ export class CodexAdapter implements AgentAdapter {
     this.info = {
       agent: "codex",
       implementation: options.implementation ?? (this.client instanceof CodexAppServerProcessClient ? "official-codex-app-server" : "injected-codex-client"),
-      version: "0.1.0",
+      version: BRIDGE_VERSION,
       capabilities: [
         ...(this.client.supportsStopConfirmation ? ["stop-confirmation"] : []),
         "code",

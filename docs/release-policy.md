@@ -31,12 +31,16 @@ project does not promise that a database created by one revision will be readabl
 
 ## Versioning
 
-- The package/checkpoint version is `0.2.0` and the workspace root is marked `private`; nothing here is
+- The package/checkpoint version is `0.3.0` and the workspace root is marked `private`; nothing here is
   published to a package registry.
 - While the major version is `0`, a minor bump may carry breaking changes. Treat every version
   change as potentially breaking and read the changelog.
 - Stable public checkpoints use annotated Semantic Versioning tags and matching GitHub
   Releases. Published release tags are never moved or recreated.
+- Prepare a draft with all assets, then publish it with repository release immutability
+  enabled. Source and compiled archives, the canonical skill, SHA-256 sums, a dependency
+  inventory and the source/build identity accompany the release. GitHub Actions build
+  attestations complement these hashes; they do not certify production safety.
 
 ## Changelog
 
@@ -55,6 +59,10 @@ npm run build                       # compiled workspace packages
 npm test                            # deterministic regression suite
 node docs/tools/check-doc-links.mjs # documentation and internal-link gate
 node scripts/certification-manifest.mjs
+npm run skills:check
+npm run links:check
+npm run test:tracking-ui
+npm audit --audit-level=low
 ```
 
 Then, before publishing anything:
@@ -64,6 +72,17 @@ Then, before publishing anything:
 2. confirm proof artifacts under `BENCHMARK/` remain minimal and redacted;
 3. confirm the changelog entry matches what actually changed;
 4. confirm no claim was added that the committed evidence does not support.
+
+The [CI workflow](../.github/workflows/ci.yml) runs the gates on Linux and Windows. The
+[release workflow](../.github/workflows/release.yml) is dispatched manually for an existing
+annotated tag, repeats the gates on Linux, builds allowlisted archives and creates a draft.
+Review its conclusion and the downloaded asset hashes before publishing. The release
+workflow never moves a tag or overwrites a published release.
+
+Repository security configuration is checked separately: secret scanning and push
+protection, dependency alerts/security updates and private vulnerability reporting. These
+controls and GitHub's community profile are maintenance checks, not a legal or security
+compliance certification. See [v0.3.0 installation notes](releases/v0.3.0.md).
 
 ## Claim discipline
 
