@@ -32,6 +32,18 @@ Use the live MCP schema as the final authority. Load this map only when the exac
 | `bridge_add_dependency` | Add a dependency to a task the agent controls; cycles are rejected. |
 | `bridge_snapshot` | Inspect counts, ready tasks, adapters, and live leases when concurrency matters. |
 
+## Optional visual observation
+
+| Tool | Use |
+|---|---|
+| `bridge_tracking_open` | Open the read-only view on explicit request, before a long delegation; choose `display: "browser"` if the native host lacks MCP Apps. |
+| `bridge_tracking_bind` | Widget selects an existing run; `run_id: null` restores automatic follow. |
+| `bridge_tracking_read` | Widget polls a safe snapshot and signed cursor; not routine model polling. |
+| `bridge_tracking_history` | Widget pages existing runs with a signed, filter-bound token. |
+| `bridge_tracking_close` | Close the view; `disable: true` also opts out. Neither action cancels work. |
+
+Read [tracking-ui.md](tracking-ui.md) for observation-only ChatGPT connections and host limits.
+
 ## Recovery and debugging tools
 
 | Tool | Use |

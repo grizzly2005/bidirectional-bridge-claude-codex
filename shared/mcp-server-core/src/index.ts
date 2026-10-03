@@ -19,3 +19,7 @@ export type { BridgeProcessIdentity } from "./diagnostics.js";
 
 /** Re-exported so a launcher needs one import for the whole server surface. */
 export { SimpleAdapterRegistry } from "@bridge/control-plane";
+export { TrackingMcpServer } from "./tracking-server.js";
+export { TrackingCoordinator, TRACKING_RESOURCE_URI } from "./tracking.js";
+export { TrackingReader, TrackingError } from "./tracking-reader.js";
+export { TRACKING_TOOL_NAMES } from "./tracking-tools.js";

@@ -40,6 +40,13 @@ explicitly.
 
 ### Added
 
+- Add opt-in read-only MCP Apps delegation tracking with a dotted graph, keyboard list,
+  attempt/resume details, paged history and authenticated loopback browser fallback.
+- Add an independent stdio tracking observer for private MCP tunnels, without a writable
+  control plane, runtime adapter, recovery or delegation tools.
+- Preserve private task content through an allowlisted projection, signed scoped cursors,
+  separate UI preferences, visibility-aware bounded polling and independent view closure.
+
 - Add versioned bridge-clock attempt, queue, startup, work and separate observation-seal
   spans without redefining cumulative legacy or provider durations.
 - Generate three client skill mirrors from `skills/using-bridge/` and verify their consistency
@@ -50,6 +57,10 @@ explicitly.
   safe aggregate diagnostics without model calls or historical migrations.
 
 ### Changed
+
+- Build a bundled self-contained tracking resource and synchronize opt-in guidance across
+  all three client skill mirrors. Upgrade the compatible test runner and patched transitive
+  dependencies; keep MCP Apps SDK1.7.5 compatible with the existing MCP SDK1.x/Zod3 stack.
 
 - **Compatibility:** native Codex now defaults to App Server; legacy MCP is explicit opt-in.
   Unsupported implicit OpenAI desktop models use the installed CLI's advertised default;

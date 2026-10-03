@@ -9,7 +9,7 @@ Use the bridge as a coordination layer, not as a reason to involve another agent
 
 ## Choose the path
 
-This folder is the versioned source. Generate the client mirrors with
+`skills/using-bridge/` is the versioned source. Generate the client mirrors with
 `node scripts/sync-bridge-skill.mjs --write`; check them with `--check`.
 Edit the source rather than a client mirror.
 
@@ -17,6 +17,7 @@ Edit the source rather than a client mirror.
 - **Review:** ask the other runtime for a bounded, usually read-only, independent review.
 - **Recover:** resume one known stranded task in place after quota, timeout, crash, or process interruption.
 - **Observe:** inspect telemetry or events only when the user requests them, during dogfooding, or for diagnosis.
+- **Track visually:** on a request such as “active le suivi de délégation”, open the opt-in view before a blocking delegation; read [tracking-ui.md](references/tracking-ui.md).
 - **Do not use the bridge:** complete trivial, tightly coupled, or cheaper single-agent work locally.
 
 If native bridge tools are absent, report that limitation and use read-only offline sources
@@ -24,6 +25,10 @@ for observation when useful. Configuration files and an offline review do not pr
 bridge delegation. Do not replace missing MCP access with a direct worker CLI call.
 
 If this session is already a delegated worker with a supplied `task_id`, scope, expected deliverable, and verification criteria, complete that contract. Do not create a new root or delegate again unless the contract explicitly permits it.
+
+Tracking does not create a task, confer manager authority, or trigger another model. Keep
+UI polling in the widget, never in repeated model turns. Closing or disabling the view
+leaves workers running; cancellation remains a separate explicit request.
 
 ## Decide whether to delegate
 

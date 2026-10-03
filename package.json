@@ -14,20 +14,26 @@
   "homepage": "https://github.com/grizzly2005/bidirectional-bridge-claude-codex#readme",
   "type": "module",
   "bin": {
-    "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs"
+    "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
+    "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs"
   },
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "workspaces": [
     "shared/*",
     "claude/*",
     "codex/*"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node scripts/build-tracking-ui.mjs",
     "typecheck": "tsc --build --force",
     "clean": "tsc --build --clean",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:tracking-ui": "node scripts/test-tracking-ui.mjs",
+    "test:tracking-permissions": "node scripts/test-tracking-permissions.mjs",
+    "benchmark:tracking": "node scripts/benchmark-tracking.mjs",
     "skills:check": "node scripts/sync-bridge-skill.mjs --check",
     "skills:sync": "node scripts/sync-bridge-skill.mjs --write",
     "links:check": "node scripts/repair-workspace-links.mjs",
@@ -36,8 +42,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "esbuild": "0.28.2",
+    "playwright": "1.62.1",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.6"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "vite": "6.4.3"

@@ -272,6 +272,9 @@ export class SqliteStateStore implements StateStore {
       if (version) assertSchemaVersion(version["value"], SCHEMA_VERSION);
       this.db.exec(DDL);
       this.migrateSchema();
+      // Older schemas do not have lineage columns until migrateSchema has completed.
+      // Installed only by the writable manager, never by an observation connection.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_run_created ON tasks(run_id, created_at, task_id); CREATE INDEX IF NOT EXISTS idx_tasks_roots_created ON tasks(created_at DESC, task_id DESC) WHERE parent_task_id IS NULL; CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);");
       this.db.prepare("INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)").run(String(SCHEMA_VERSION));
     });
     } catch (error) { this.db.close(); throw error; }

@@ -16,6 +16,9 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ControlPlane, Orchestrator } from "@bridge/control-plane";
 import type { AgentAdapter, AgentId } from "@bridge/protocol";
 import type { BridgeProcessIdentity } from "./diagnostics.js";
+import { TrackingCoordinator } from "./tracking.js";
+import { TrackingHttpServer } from "./tracking-http.js";
+import { registerTracking, TRACKING_TOOL_NAMES } from "./tracking-tools.js";
 import {
   TOOLS,
   runTool,
@@ -68,6 +71,8 @@ export class BridgeMcpServer {
   private readonly server: McpServer;
   private readonly ctx: ToolContext;
   private readonly tools: readonly ToolDefinition[];
+  readonly tracking: TrackingCoordinator;
+  private readonly trackingBrowser: TrackingHttpServer;
   /** True when this instance opened the control plane and must therefore close it. */
   private readonly ownsControlPlane: boolean;
   private closed = false;
@@ -84,11 +89,16 @@ export class BridgeMcpServer {
     this.orchestrator = new Orchestrator(this.cp);
     for (const adapter of options.adapters ?? []) this.cp.adapters.register(adapter);
 
+    this.tracking = new TrackingCoordinator({ workspaceRoot: options.workspaceRoot,
+      databasePath: options.databasePath, principal: options.agent ?? "bridge" });
+    this.trackingBrowser = new TrackingHttpServer(this.tracking);
+
     this.ctx = {
       cp: this.cp,
       orchestrator: this.orchestrator,
       defaultAgent: options.agent ?? "bridge",
       delegationPolicy: options.delegationPolicy ?? "allow",
+      tracking: this.tracking,
       ...(options.startupIdentity ? { startupIdentity: options.startupIdentity } : {}),
     };
 
@@ -105,10 +115,12 @@ export class BridgeMcpServer {
     for (const tool of this.tools) {
       this.server.registerTool(
         tool.name,
-        { title: tool.title, description: tool.description, inputSchema: tool.inputShape },
+        { title: tool.title, description: tool.description, inputSchema: tool.inputShape,
+          _meta: { ui: { visibility: ["model"] } } },
         async (args: Record<string, unknown>) => runTool(tool, args ?? {}, this.ctx),
       );
     }
+    registerTracking(this.server, this.tracking, this.trackingBrowser);
   }
 
   /** Connect over stdio (default) or an injected transport. */
@@ -130,6 +142,8 @@ export class BridgeMcpServer {
     try {
       await this.server.close();
     } finally {
+      await this.trackingBrowser.close();
+      this.tracking.close();
       if (this.ownsControlPlane) this.cp.close();
     }
   }
@@ -144,6 +158,6 @@ export class BridgeMcpServer {
   }
 
   get toolNames(): readonly string[] {
-    return this.tools.map((t) => t.name);
+    return [...this.tools.map((t) => t.name), ...TRACKING_TOOL_NAMES];
   }
 }

@@ -28,6 +28,7 @@ automatically, or merge code for you.
 - [Ownership and leases](#ownership-and-leases)
 - [Recovery](#recovery)
 - [Telemetry](#telemetry)
+- [Delegation tracking](#delegation-tracking)
 - [Troubleshooting](#troubleshooting)
 - [Security and privacy](#security-and-privacy)
 - [Contributing](#contributing)
@@ -381,6 +382,14 @@ a disposable database snapshot without migrating historical state; it cannot att
 loaded client or provider availability. Upgrade and rollback guidance is in
 [docs/BRIDGE_RELEASE_ROLLBACK.md](docs/BRIDGE_RELEASE_ROLLBACK.md), with implementation evidence
 in [the repair tracker](docs/SUIVI_PATCHS_BRIDGE_2026-10-01.md).
+
+## Delegation tracking
+
+Ask “active le suivi de délégation” to open an optional read-only MCP App before a long
+delegation. The view shows a dotted graph, attempts/resumes, separate task/runtime/observation
+states and paged history. Closing it leaves work running. Hosts without MCP Apps have an
+authenticated local browser fallback; ChatGPT can connect to the independent observer
+through a private MCP tunnel. See [setup and limits](docs/delegation-tracking.md).
 
 ## Troubleshooting
 

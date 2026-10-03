@@ -27,6 +27,7 @@ import {
 } from "@bridge/protocol";
 import type { ControlPlane, Orchestrator } from "@bridge/control-plane";
 import { bridgeDiagnostics, type BridgeProcessIdentity } from "./diagnostics.js";
+import type { TrackingCoordinator } from "./tracking.js";
 
 /* ------------------------------------------------------------------ *
  * Zod shapes (the MCP SDK builds JSON Schema from these)
@@ -83,6 +84,7 @@ export interface ToolContext {
   readonly startupIdentity?: BridgeProcessIdentity;
   /** Generic server-side delegation policy selected when the process starts. */
   readonly delegationPolicy: DelegationPolicy;
+  readonly tracking?: TrackingCoordinator;
 }
 
 export type DelegationPolicy = "allow" | "deny";
@@ -169,6 +171,10 @@ export const TOOLS: readonly ToolDefinition[] = [
           : {}),
         ...(args["idempotency_key"] ? { idempotency_key: args["idempotency_key"] as string } : {}),
       });
+      if (task.parent_task_id === null) {
+        // UI failures must never turn a successfully created task into a failed operation.
+        try { ctx.tracking?.followRun(task.run_id); } catch { /* observer can reconcile on its next read */ }
+      }
       return {
         task_id: task.task_id,
         run_id: task.run_id,
@@ -701,6 +707,9 @@ export const TOOLS: readonly ToolDefinition[] = [
           "delegation is denied by this server's startup policy",
           { policy: "deny", caller: ctx.defaultAgent, target: args["to"] },
         );
+      }
+      if (typeof args["run_id"] === "string") {
+        try { ctx.tracking?.followRun(args["run_id"]); } catch { /* independent observation */ }
       }
       const outcome = await ctx.orchestrator.delegate({
         from: who(args, ctx),

@@ -12,6 +12,10 @@ coverage/
 *.db-journal
 *.db-wal
 *.db-shm
+*.tracking-ui.sqlite
+*.tracking-ui.sqlite-journal
+*.tracking-ui.sqlite-wal
+*.tracking-ui.sqlite-shm
 
 # Client-local trust and private state. Keep the shared bridge skill while
 # continuing to ignore every other client-local file by default.

@@ -30,7 +30,8 @@ export default defineConfig({
     environment: "node",
     // Deterministic: no parallel SQLite contention across files.
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
+    maxWorkers: 1,
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },

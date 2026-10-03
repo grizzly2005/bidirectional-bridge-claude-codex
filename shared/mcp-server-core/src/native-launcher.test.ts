@@ -216,6 +216,7 @@ describe("native project MCP launcher", () => {
     expect(rootPackage.private).toBe(true);
     expect(rootPackage.bin).toEqual({
       "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
+      "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs",
     });
     expect(readFileSync(launcher, "utf8").split(/\r?\n/u)[0]).toBe("#!/usr/bin/env node");
     if (process.platform !== "win32") expect(statSync(launcher).mode & 0o111).not.toBe(0);
