@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync, symlinkSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -34,6 +35,28 @@ function fixture() {
 }
 
 describe("read-only tracking and authority", () => {
+  it("starts the linked observer CLI and MCP server through an npm-style junction", async () => {
+    const temporary = mkdtempSync(join(tmpdir(), "bridge-tracking-linked-"));
+    cleanups.push(() => rmSync(temporary, { recursive: true, force: true }));
+    const repository = fileURLToPath(new URL("../../../", import.meta.url));
+    const linked = join(temporary, "linked-bridge");
+    symlinkSync(repository, linked, process.platform === "win32" ? "junction" : "dir");
+    const launcher = join(linked, "scripts", "bridge-tracking-mcp.mjs");
+    const help = spawnSync(process.execPath, [launcher, "--help"], { encoding: "utf8", windowsHide: true });
+    expect(help.status).toBe(0);
+    expect(help.stderr).toContain("Independent read-only observer");
+    const workspace = join(temporary, "workspace");
+    mkdirSync(workspace);
+    const client = new Client({ name: "linked-tracking-check", version: "1" });
+    cleanups.push(() => client.close());
+    await client.connect(new StdioClientTransport({ command: process.execPath,
+      args: [launcher, "--workspace", workspace], stderr: "pipe" }));
+    const tools = (await client.listTools()).tools;
+    expect(tools).toHaveLength(5);
+    expect(tools.every(tool => tool.name.startsWith("bridge_tracking_"))).toBe(true);
+    expect(existsSync(join(workspace, ".bridge", "bridge.db"))).toBe(false);
+  });
+
   it("follows insertion order even when root timestamps tie", () => {
     const f = fixture(); const a = f.root(); const b = f.root();
     const db = new DatabaseSync(f.databasePath); cleanups.push(() => db.close());

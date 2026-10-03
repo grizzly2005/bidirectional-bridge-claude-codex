@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export function parseTrackingArgs(argv, cwd = process.cwd()) {
@@ -30,6 +31,9 @@ export async function runTracking(args) {
   if (!args.browser) process.stdin.once("end", close);
   return server;
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function canonicalPath(path) {
+  try { return realpathSync(resolve(path)); } catch { return resolve(path); }
+}
+if (process.argv[1] && canonicalPath(process.argv[1]) === canonicalPath(fileURLToPath(import.meta.url))) {
   runTracking(parseTrackingArgs(process.argv.slice(2))).catch(() => { process.stderr.write("Tracking observer failed; check the build and workspace configuration.\n"); process.exitCode = 1; });
 }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Exact public project material for the experimental v0.3.0 bridge, durable execution, opt-in tracking and GitHub release workflows.",
+  "description": "Exact public project material for the experimental v0.3.1 bridge, durable execution, opt-in tracking and GitHub release workflows.",
   "hash_definition": {
     "algorithm": "sha256",
     "domain_separator": "bridge-certification-manifest-v1",
@@ -180,6 +180,7 @@
     "docs/recovery.md",
     "docs/release-policy.md",
     "docs/releases/v0.3.0.md",
+    "docs/releases/v0.3.1.md",
     "docs/roadmap.md",
     "docs/security.md",
     "docs/telemetry.md",

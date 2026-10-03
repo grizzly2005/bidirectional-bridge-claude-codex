@@ -17,4 +17,4 @@ export * from "./adapter.js";
 export const PROTOCOL_VERSION = "1.3.0";
 
 /** Release identity; separate from the wire protocol and persisted schema versions. */
-export const BRIDGE_VERSION = "0.3.0";
+export const BRIDGE_VERSION = "0.3.1";

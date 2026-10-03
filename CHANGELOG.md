@@ -13,6 +13,20 @@ explicitly.
 
 No changes recorded yet.
 
+## 0.3.1 — 2026-10-03
+
+### Fixed
+
+- Start the tracking observer through npm's global package symlink or Windows junction by
+  comparing canonical entrypoint paths. The same linked invocation now serves MCP and
+  displays CLI help; add a regression that checks both without creating a bridge database.
+
+### Documentation
+
+- Recommend v0.3.1 for new installations. It contains all v0.3.0 changes with unchanged
+  protocol and persistence versions; the v0.3.0 tag and assets remain immutable.
+
+
 ## 0.3.0 — 2026-10-03
 
 ### Fixed

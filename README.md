@@ -13,8 +13,8 @@ and runtime telemetry, exposed to each client as a native project-scoped MCP ser
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
 
-The current checkpoint is [v0.3.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.0).
-See the [release notes](docs/releases/v0.3.0.md) for durable execution, schema-v4 migration,
+The current checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.1).
+See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
 opt-in delegation tracking, downloads and verification.
 
 ## Table of contents

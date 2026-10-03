@@ -31,7 +31,7 @@ project does not promise that a database created by one revision will be readabl
 
 ## Versioning
 
-- The package/checkpoint version is `0.3.0` and the workspace root is marked `private`; nothing here is
+- The package/checkpoint version is `0.3.1` and the workspace root is marked `private`; nothing here is
   published to a package registry.
 - While the major version is `0`, a minor bump may carry breaking changes. Treat every version
   change as potentially breaking and read the changelog.
