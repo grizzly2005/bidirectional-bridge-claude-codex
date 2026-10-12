@@ -6,8 +6,9 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
-import { ErrorCode } from "@bridge/protocol";
+import { ErrorCode, EventType, type MemoryNote, type MemoryScope } from "@bridge/protocol";
 import { ControlPlane } from "./control-plane.js";
 import { SqliteStateStore, type JournalMode } from "./store/sqlite-store.js";
 
@@ -20,6 +21,7 @@ const ROOT_TASK = "task_0000000001", CHILD_TASK = "task_0000000002", RUN = "run_
 const RAW_SPEC = JSON.stringify({ objective: "historical fixture", scope: { paths: ["legacy/**"] },
   dependencies: [], expected_deliverable: "retained result", verification_criteria: ["fixture check"], old_optional_field: "retained" }, null, 2);
 const OLD_PAYLOAD = '{ "reason": "history", "unknown_optional_field": [1, "é"] }';
+const MEMORY_SCOPE: MemoryScope = { namespace: "development", context_id: "legacy", branch: null, application_version: null, epoch: null };
 
 function directory(): string {
   const path = mkdtempSync(join(tmpdir(), "bridge-schema-contract-"));
@@ -28,7 +30,7 @@ function directory(): string {
 }
 
 /** Fixed historical layouts, not extracted from the current DDL. */
-function historicalDatabase(path: string, version: 1 | 2 | 3 | 4): void {
+function historicalDatabase(path: string, version: 1 | 2 | 3 | 4 | 5): void {
   const db = new DatabaseSync(path);
   try {
     db.exec(`
@@ -54,10 +56,10 @@ function historicalDatabase(path: string, version: 1 | 2 | 3 | 4): void {
         bytes INTEGER NOT NULL, produced_by TEXT NOT NULL, created_at INTEGER NOT NULL, metadata_json TEXT);
       CREATE TABLE status_updates(id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
         agent TEXT NOT NULL, at INTEGER NOT NULL, json TEXT NOT NULL);
-      CREATE TABLE deliverables(task_id TEXT PRIMARY KEY, agent TEXT NOT NULL, status TEXT NOT NULL,
+      CREATE TABLE deliverables(task_id TEXT PRIMARY KEY, ${version >= 5 ? "attempt INTEGER," : ""} agent TEXT NOT NULL, status TEXT NOT NULL,
         at INTEGER NOT NULL, json TEXT NOT NULL);
       CREATE TABLE verifications(id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
-        kind TEXT NOT NULL, passed INTEGER NOT NULL, json TEXT NOT NULL);
+        ${version >= 5 ? "attempt INTEGER," : ""} kind TEXT NOT NULL, passed INTEGER NOT NULL, json TEXT NOT NULL);
       CREATE TABLE events(event_id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL,
         task_id TEXT, agent TEXT NOT NULL, at INTEGER NOT NULL, payload_json TEXT NOT NULL, idempotency_key TEXT);
       CREATE TABLE idempotency(key TEXT PRIMARY KEY, operation TEXT NOT NULL, request_hash TEXT NOT NULL,
@@ -83,8 +85,10 @@ function historicalDatabase(path: string, version: 1 | 2 | 3 | 4): void {
     db.prepare("INSERT INTO artifacts VALUES('artifact_0000000001', ?, 'report', 'old result', 'text/plain', NULL, 'retained', ?, 8, 'codex', 20, ?)")
       .run(ROOT_TASK, "b".repeat(64), OLD_PAYLOAD);
     db.prepare("INSERT INTO status_updates VALUES(3, ?, 'codex', 20, ?)").run(CHILD_TASK, OLD_PAYLOAD);
-    db.prepare("INSERT INTO deliverables VALUES(?, 'codex', 'COMPLETE', 24, ?)").run(ROOT_TASK, OLD_PAYLOAD);
-    db.prepare("INSERT INTO verifications VALUES(4, ?, 'test', 1, ?)").run(ROOT_TASK, OLD_PAYLOAD);
+    // Schema v5 records the producing attempt; earlier layouts have no such column.
+    const attempt = version >= 5 ? [", attempt", ", 0"] : ["", ""];
+    db.prepare(`INSERT INTO deliverables(task_id, agent, status, at, json${attempt[0]}) VALUES(?, 'codex', 'COMPLETE', 24, ?${attempt[1]})`).run(ROOT_TASK, OLD_PAYLOAD);
+    db.prepare(`INSERT INTO verifications(id, task_id, kind, passed, json${attempt[0]}) VALUES(4, ?, 'test', 1, ?${attempt[1]})`).run(ROOT_TASK, OLD_PAYLOAD);
     db.prepare("INSERT INTO events VALUES(7, 'task.created', ?, 'claude', 10, ?, 'old-create')").run(ROOT_TASK, OLD_PAYLOAD);
     db.prepare("INSERT INTO events VALUES(9, 'task.failed', ?, 'codex', 25, ?, NULL)").run(CHILD_TASK, OLD_PAYLOAD);
     db.prepare("INSERT INTO idempotency VALUES('old-key', 'task.create', ?, ?, 10)").run("a".repeat(64), OLD_PAYLOAD);
@@ -94,12 +98,13 @@ function historicalDatabase(path: string, version: 1 | 2 | 3 | 4): void {
       db.prepare("INSERT INTO attempt_telemetry VALUES(?, 0, ?, 'codex', ?)").run(CHILD_TASK, RUN,
         '{ "task_id": "task_0000000002", "attempt": 0, "duration_measurement_version": 1, "input_tokens": null, "wall_duration_ms": 30 }');
     }
-    if (version === 4) {
+    if (version >= 4) {
       db.exec(`CREATE TABLE delegation_operations(caller TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL,
         phase TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY(caller,key));
         CREATE TABLE task_executions(task_id TEXT PRIMARY KEY, agent TEXT NOT NULL, phase TEXT NOT NULL, json TEXT NOT NULL);
         CREATE TABLE attempt_observations(task_id TEXT NOT NULL, attempt INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(task_id,attempt));`);
     }
+    if (version === 5) db.exec("CREATE INDEX idx_verif_task_attempt ON verifications(task_id, attempt, id);");
   } finally { db.close(); }
 }
 
@@ -136,8 +141,8 @@ function rejectedOpen(path: string, journalMode: JournalMode = "auto"): unknown 
   finally { store?.close(); }
 }
 
-describe("v5 migration contracts", () => {
-  it.each([1, 2, 3, 4] as const)("upgrades a copy of schema v%s while preserving the original snapshot and every historical field", version => {
+describe("v6 migration contracts", () => {
+  it.each([1, 2, 3, 4, 5] as const)("upgrades a copy of schema v%s while preserving the original snapshot and every historical field", version => {
     const dir = directory(), original = join(dir, "snapshot.db"), working = join(dir, "candidate.db");
     historicalDatabase(original, version);
     const originalHash = hashFile(original), before = snapshot(original);
@@ -159,14 +164,17 @@ describe("v5 migration contracts", () => {
       expect(cp.store.listObservations()).toEqual([]);
       expect(cp.store.listExecutions()).toEqual([]);
       expect(cp.store.lastEventId()).toBe(9);
+      // No memory note is synthesized from historical tasks, events or artifacts.
+      expect(cp.store.listMemoryChanges({ scope: MEMORY_SCOPE, after: 0, before_cursor: 9, limit: 100 })).toEqual([]);
     } finally { cp.close(); }
     const after = snapshot(working, before.columns);
     const historicalRows = { ...before.rows,
-      schema_meta: before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row) };
+      schema_meta: before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "6" } : row) };
     expect(after.rows).toEqual(historicalRows);
     const upgraded = snapshot(working);
     expect(upgraded.schema.filter(row => row["type"] === "table").map(row => row["name"]))
-      .toEqual(expect.arrayContaining(["delegation_operations", "task_executions", "attempt_observations", "attempt_telemetry", "operator_extension"]));
+      .toEqual(expect.arrayContaining(["delegation_operations", "task_executions", "attempt_observations", "attempt_telemetry", "operator_extension", "memory_notes"]));
+    expect(upgraded.rows["memory_notes"]).toEqual([]);
     expect(hashFile(original)).toBe(originalHash);
     expect(snapshot(original)).toEqual(before);
     const reopened = new SqliteStateStore({ path: working, journalMode: "DELETE" });
@@ -200,11 +208,43 @@ describe("v5 migration contracts", () => {
     expect(after.schema.some(row => row["name"] === "idx_verif_task_attempt")).toBe(true);
   });
 
+  it("upgrades schema5 to schema6 with recorded attempts unchanged and memory durable beside history", () => {
+    const dir = directory(), path = join(dir, "candidate.db"); historicalDatabase(path, 5);
+    const before = snapshot(path);
+    expect(before.rows["verifications"]!.map(row => row["attempt"])).toEqual([0]);
+    const store = new SqliteStateStore({ path, journalMode: "DELETE" });
+    let note: MemoryNote;
+    try {
+      // Recorded v5 attempts stay authoritative; they are neither nulled nor re-derived.
+      expect(store.listVerifications(ROOT_TASK, 0)).toEqual([JSON.parse(OLD_PAYLOAD)]);
+      expect(store.listVerifications(ROOT_TASK, null)).toEqual([]);
+      note = store.transaction(() => {
+        const event = store.appendEvent({ type: EventType.MEMORY_UPDATED, task_id: ROOT_TASK, agent: "codex", payload: { key: "legacy" } }, 30);
+        const created: MemoryNote = { schema_version: 1, scope: MEMORY_SCOPE, key: "legacy", revision: 1, change_cursor: event.event_id,
+          at: 30, kind: "context", title: "after upgrade", summary: "written on a migrated database", lifecycle: "active",
+          references: [], related_task_ids: [ROOT_TASK], abandonment: null,
+          provenance: { agent: "codex", task_id: ROOT_TASK, run_id: RUN, attempt: 0 } };
+        store.insertMemoryNote(created, 0);
+        return created;
+      });
+      expect(note.change_cursor).toBe(10);
+    } finally { store.close(); }
+    const reopened = new SqliteStateStore({ path, journalMode: "DELETE" });
+    try { expect(reopened.getMemoryNote(MEMORY_SCOPE, "legacy")).toEqual(note); }
+    finally { reopened.close(); }
+    const after = snapshot(path, before.columns).rows;
+    for (const table of Object.keys(before.columns).filter(name => !["schema_meta", "events", "sqlite_sequence"].includes(name))) {
+      expect(after[table], table).toEqual(before.rows[table]);
+    }
+    expect(after["events"]!.slice(0, before.rows["events"]!.length)).toEqual(before.rows["events"]);
+    expect(after["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "6" } : row));
+  });
+
   it("rolls back all DDL and projected run ids when the final version commit fails", () => {
     const dir = directory(), path = join(dir, "candidate.db");
     historicalDatabase(path, 1);
     const db = new DatabaseSync(path);
-    db.exec("CREATE TRIGGER reject_schema_commit BEFORE INSERT ON schema_meta WHEN NEW.key='schema_version' AND NEW.value='5' BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END;");
+    db.exec("CREATE TRIGGER reject_schema_commit BEFORE INSERT ON schema_meta WHEN NEW.key='schema_version' AND NEW.value='6' BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END;");
     db.close();
     const before = snapshot(path), error = rejectedOpen(path, "DELETE");
     expect(error).toBeInstanceOf(Error);
@@ -260,8 +300,13 @@ describe("v5 migration contracts", () => {
     const dir = directory(), path = join(dir, "candidate.db"), barrier = join(dir, "start.marker");
     historicalDatabase(path, 1);
     const before = snapshot(path);
-    const modulePath = join(repoRoot, "shared/control-plane/dist/store/sqlite-store.js");
-    expect(existsSync(modulePath), "Build the bridge before the independent process migration fixture").toBe(true);
+    // Bundle the current source: a stale dist build would migrate to an older schema version.
+    const modulePath = join(dir, "sqlite-store.bundle.mjs");
+    await build({
+      entryPoints: [join(repoRoot, "shared/control-plane/src/store/sqlite-store.ts")],
+      bundle: true, platform: "node", format: "esm", target: "node22", outfile: modulePath, logLevel: "silent",
+      alias: { "@bridge/protocol": join(repoRoot, "shared/protocol/src/index.ts") },
+    });
     const worker = join(dir, "migrate.mjs");
     writeFileSync(worker, `import { existsSync } from 'node:fs';\nimport { SqliteStateStore } from ${JSON.stringify(pathToFileURL(modulePath).href)};\nconst [database, barrier] = process.argv.slice(2);\nprocess.stdout.write('ready\\n');\nfor (let n=0; !existsSync(barrier); n++) { if(n>1000) throw new Error('fixture barrier timeout'); await new Promise(resolve=>setTimeout(resolve,5)); }\nconst store = new SqliteStateStore({path:database});\ntry { process.stdout.write(JSON.stringify({tasks:store.listTasks().length, events:store.lastEventId()})+'\\n'); } finally { store.close(); }\n`);
     function start(): { ready: Promise<void>; done: Promise<any>; child: ChildProcess } {
@@ -287,7 +332,7 @@ describe("v5 migration contracts", () => {
     const rows = snapshot(path, before.columns).rows;
     expect(rows["events"]).toEqual(before.rows["events"]);
     expect(rows["task_attempts"]).toEqual(before.rows["task_attempts"]);
-    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row));
+    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "6" } : row));
   });
 
   it("waits for a copied hot rollback journal to become readable before opening the original", async () => {
@@ -322,6 +367,6 @@ describe("v5 migration contracts", () => {
     const rows = snapshot(path, before.columns).rows;
     expect(rows["events"]).toEqual(before.rows["events"]);
     expect(rows["task_attempts"]).toEqual(before.rows["task_attempts"]);
-    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row));
+    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "6" } : row));
   });
 });

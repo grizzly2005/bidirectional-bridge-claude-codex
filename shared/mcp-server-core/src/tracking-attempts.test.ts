@@ -31,7 +31,7 @@ function fixture() {
 }
 function writable(path: string) { const db = new DatabaseSync(path); cleanups.push(() => db.close()); return db; }
 
-describe("tracking schema4/5 and attempt freshness", () => {
+describe("tracking schema4/5/6 and attempt freshness", () => {
   it("counts only the new attempt's callback checks and ignores an old partial deliverable", () => {
     const { path, cp, task, reader, submit } = fixture();
     cp.deliverables.recordVerification(task.task_id, "codex", fail); submit([fail], "PARTIAL");
@@ -76,5 +76,18 @@ describe("tracking schema4/5 and attempt freshness", () => {
     expect(reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 1, failed: 0 });
     db.exec("UPDATE schema_meta SET value='5' WHERE key='schema_version'; UPDATE verifications SET attempt=NULL;");
     expect(reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 0, failed: 0 });
+  });
+
+  it("reads schema6 memory alongside attempt evidence without exposing working-note content", () => {
+    const { path, cp, task, reader } = fixture();
+    cp.deliverables.recordVerification(task.task_id, "codex", pass);
+    cp.memory.upsert({ task_id: task.task_id, agent: "codex", key: "private-note", expected_revision: 0, idempotency_key: "private-note",
+      scope: { namespace: "development", context_id: "PRIVATE_CONTEXT", branch: null, application_version: null, epoch: null },
+      note: { kind: "decision", title: "PRIVATE_TITLE", summary: "PRIVATE_MEMORY", lifecycle: "active", references: [], related_task_ids: [], abandonment: null } });
+    const db = new DatabaseSync(path, { readOnly: true });
+    try { expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toMatchObject({ value: "6" }); } finally { db.close(); }
+    const snapshot = reader.snapshot(task.run_id);
+    expect(snapshot.tasks[0]?.verification).toEqual({ passed: 1, failed: 0 });
+    expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_");
   });
 });

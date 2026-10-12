@@ -178,9 +178,33 @@ path writes, and does not conflict with other tasks' write scopes. Do not mix it
 globs. Codex uses a read-only sandbox for these tasks; the Claude contract and result gate
 require `changed_scope: []` and inline outputs. CLI directory access is not an OS sandbox.
 
-The experimental database uses schema 5. Keep it separate from a schema-4 release database;
-older binaries cannot reopen a database upgraded to version 5. Existing verification history
+The experimental database uses schema 6. Keep it separate from a schema-4/5 release database;
+older binaries cannot reopen a database upgraded to version 6. Existing verification history
 is retained, but old rows without a known attempt do not certify a new attempt.
+
+## Shared working memory
+
+When starting or resuming work that needs continuity, call `memory_get_context` for the
+explicit project/program, namespace, branch, application version and evidence epoch.
+The native manager performs these MCP calls. Delegated Codex workers have the project bridge
+MCP disabled; load a useful context as manager, publish a compact input artifact, and persist
+the returned working deltas under the manager's own task with references to the worker output.
+Request only the useful notes with a bounded byte budget. Keep the database/scope and
+`change_cursor` together; use `memory_get_changes` at handoff or resumption for deltas.
+Do not inject all memory into every prompt or load an old program's context implicitly.
+
+Before handing work off, use `memory_upsert` for meaningful decisions, observations,
+pending actions or abandoned-track reasons. Supply your current owned WORKING/VERIFYING
+task, the revision you read and a stable idempotency key. On `REVISION_CONFLICT`, reread
+and merge explicitly. Notes can be enriched by another caller using its own current task;
+reading them never requires taking over their author's old task. Lifecycle is active,
+superseded or archived, and earlier revisions remain accessible through the changes feed.
+
+Keep detail in canonical artifacts and campaigns; store their IDs/hashes and record/epoch
+references in the note. Memory cannot confirm a finding or modify campaign JSON. A stopped
+investigation needs its reason, tested conditions and reopening trigger. Read
+[shared-memory.md](references/shared-memory.md) for exact payloads, cursor pagination,
+oversized-note handling and restart verification.
 
 For reviews, separate a demonstrated blocker from a nonblocking remark or future proposal.
 Tie findings to the inspected revision and preserve useful counterexamples. After two cycles

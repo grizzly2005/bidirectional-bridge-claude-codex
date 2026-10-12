@@ -43,9 +43,9 @@ export class TrackingReader {
   constructor(readonly path: string) {}
   close(): void { this.db?.close(); this.db = undefined; }
 
-  private schemaVersion(db: InstanceType<typeof DatabaseCtor>): "4" | "5" {
+  private schemaVersion(db: InstanceType<typeof DatabaseCtor>): "4" | "5" | "6" {
     const version = (db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined)?.["value"];
-    if (version !== "4" && version !== "5") throw new TrackingError("UNSUPPORTED_SCHEMA");
+    if (version !== "4" && version !== "5" && version !== "6") throw new TrackingError("UNSUPPORTED_SCHEMA");
     return version;
   }
 
@@ -65,7 +65,7 @@ export class TrackingReader {
     return this.db;
   }
 
-  private transaction<T>(read: (db: InstanceType<typeof DatabaseCtor> | undefined, version?: "4" | "5") => T): T {
+  private transaction<T>(read: (db: InstanceType<typeof DatabaseCtor> | undefined, version?: "4" | "5" | "6") => T): T {
     const db = this.connect();
     if (!db) return read(undefined);
     try {
@@ -96,8 +96,8 @@ export class TrackingReader {
       if (!db || !runId) return { database: this.identity, snapshot_event_id: head, cursor_event: head, has_more: false, tasks: [], attempts: [], links: [], truncated: false };
       // Schema 4 cannot establish check freshness. Keep its historical projection; v5
       // counts only the current attempt, including final evidence submitted without callbacks.
-      const currentVerification = version === "5" ? " AND v.attempt=t.attempt" : "";
-      const currentDeliverable = version === "5" ? " AND d.attempt=t.attempt" : "";
+      const currentVerification = version !== "4" ? " AND v.attempt=t.attempt" : "";
+      const currentDeliverable = version !== "4" ? " AND d.attempt=t.attempt" : "";
       const rows = db.prepare(`SELECT t.task_id,t.run_id,t.parent_task_id,t.delegation_depth,t.state,t.owner,t.created_at,t.updated_at,t.attempt,
         d.status AS business_status,x.phase,CASE WHEN length(x.json)<=64000 THEN x.json END AS execution_json,
         CASE WHEN length(o.json)<=64000 THEN o.json END AS observation_json,

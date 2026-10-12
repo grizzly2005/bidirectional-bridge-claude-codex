@@ -51,7 +51,10 @@ Use an isolated database with this branch, for example:
 node scripts/native-bridge-mcp.mjs --caller codex --delegation allow --workspace . --db .bridge/experimental-web-audit.db
 ```
 
-This starts an MCP stdio server, not an interactive shell command. Point the client's MCP configuration at the same arguments when using it. Schema-v4 databases are migrated on open; the release binary cannot read schema 5. Do not use the release's database for experiments. Campaign JSON files are independent from bridge state and currently require one writer at a time.
+This starts an MCP stdio server, not an interactive shell command. Point the client's MCP configuration at the same arguments when using it. Older databases are migrated on open; older release binaries cannot read schema 6. Do not use the release's database for experiments. Campaign JSON files are independent from bridge state and currently require one writer at a time.
+
+The [shared-memory extension](shared-memory.md) keeps working notes and references in this
+SQLite state. It never turns the campaign JSON into a concurrent writer or a second finding ledger.
 
 ## Evidence and limits
 

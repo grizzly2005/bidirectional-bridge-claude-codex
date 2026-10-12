@@ -22,6 +22,8 @@ export { LeaseManager } from "./lease-manager.js";
 export type { AcquireLeaseInput, LeaseConflict } from "./lease-manager.js";
 
 export { ArtifactRegistry } from "./artifact-registry.js";
+export { MemoryService } from "./memory-service.js";
+export type { MemoryUpsertInput, MemoryContextInput, MemoryChangesInput, MemoryReadNote, MemoryReferenceState } from "./memory-service.js";
 export type { ArtifactRegistryOptions, PublishArtifactInput } from "./artifact-registry.js";
 
 export { DeliverableService } from "./deliverable-service.js";

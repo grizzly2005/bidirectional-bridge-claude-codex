@@ -14,6 +14,7 @@ export * from "./schemas.js";
 export * from "./adapter.js";
 export * from "./verification.js";
 export * from "./artifact-transport.js";
+export * from "./memory.js";
 
 /** Bumped when a breaking change lands in the wire contract. */
 export const PROTOCOL_VERSION = "1.3.0";

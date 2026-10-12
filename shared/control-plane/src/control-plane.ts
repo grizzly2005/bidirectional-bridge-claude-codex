@@ -20,6 +20,7 @@ import { type Clock, systemClock } from "./clock.js";
 import { DeliverableService } from "./deliverable-service.js";
 import { ExecutionService } from "./execution-service.js";
 import { LeaseManager } from "./lease-manager.js";
+import { MemoryService } from "./memory-service.js";
 import { SqliteStateStore, type JournalMode } from "./store/sqlite-store.js";
 import type { EventQuery, StateStore } from "./store/state-store.js";
 import { TaskService } from "./task-service.js";
@@ -46,6 +47,7 @@ export class ControlPlane {
   readonly tasks: TaskService;
   readonly leases: LeaseManager;
   readonly artifacts: ArtifactRegistry;
+  readonly memory: MemoryService;
   readonly deliverables: DeliverableService;
   readonly attempts: AttemptService;
   readonly executions: ExecutionService;
@@ -69,6 +71,7 @@ export class ControlPlane {
       },
       options.rng,
     );
+    this.memory = new MemoryService(store, this.clock, this.artifacts);
     this.deliverables = new DeliverableService(store, this.clock, this.tasks);
     this.attempts = new AttemptService(store, this.clock);
     this.executions = new ExecutionService(store, this.clock);

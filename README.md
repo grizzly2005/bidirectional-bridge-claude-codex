@@ -18,7 +18,9 @@ See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v
 opt-in delegation tracking, downloads and verification.
 
 This experimental branch also contains the [web-audit MVP and bridge reliability fixes](docs/web-audit-experimental.md).
-Its schema-v5 state must use a separate database from the schema-v4 release.
+Its schema-v6 state must use a separate database from older release state. It also provides
+[shared working memory](docs/shared-memory.md), with [development](docs/tutorials/shared-memory-development.md)
+and [web-audit](docs/tutorials/shared-memory-web-audit.md) restart examples.
 
 ## Table of contents
 
@@ -443,6 +445,7 @@ because this release publishes source on GitHub, not packages to the npm registr
 - [Architecture](docs/architecture.md) — packages, data flow, invariants
 - [Installation](docs/installation.md) — requirements, deterministic setup, project MCP config
 - [Usage](docs/usage.md) — manager workflow, worked examples, writing tasks
+- [Shared memory (experimental)](docs/shared-memory.md) — bounded context, revisions, lifecycle and changes
 - [Telemetry](docs/telemetry.md) — recorded fields, sources, privacy boundary
 - [Recovery](docs/recovery.md) — persisted handles, strict same-task resume
 - [Troubleshooting](docs/troubleshooting.md) — symptoms, checks, and fixes

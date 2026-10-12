@@ -40,7 +40,12 @@ export const DEFAULT_SERVER_INSTRUCTIONS =
   "Delegation back to an agent in the ancestor lineage is rejected. If a task you own was " +
   "stranded after persisting a runtime handle, use bridge_resume_task. If your owned manager " +
   "task directly delegated the stranded child, use bridge_resume_delegated_task; the bridge " +
-  "keeps the child owner as execution identity. Never create a replacement task for recovery.";
+  "keeps the child owner as execution identity. Never create a replacement task for recovery. " +
+  "When resuming project work, request memory_get_context for its explicit namespace/context/branch/version/epoch " +
+  "only if shared working memory is relevant. Persist its scope and change_cursor; use memory_get_changes for deltas. " +
+  "Record meaningful decisions, pending actions and abandoned-track reasons with memory_upsert before handoff, " +
+  "using your current owned task, expected_revision and a stable idempotency key. Memory notes reference " +
+  "canonical artifacts and never change campaign evidence or finding verdicts.";
 
 export interface BridgeServerOptions {
   readonly workspaceRoot: string;

@@ -37,7 +37,7 @@ Le skill canonique `skills/using-bridge/` précise ces règles, la cohérence de
 | `node --input-type=module -` — harness inline SDK MCP/Playwright | Code 0 — quatre assertions de comportement | Vue épinglée au montage, conservation de sa racine, retour au suivi courant, adoption de la prochaine racine. Zéro erreur de page, zéro appel fournisseur. Le code du harness est conservé en artefact du run. |
 | `npm run typecheck` | Code 0 | Vérification TypeScript après les dernières corrections. |
 | `node scripts/sync-bridge-skill.mjs --check` | Code 0 — zéro différence | Sept fichiers canoniques et trois copies du skill. |
-| `python -X utf8 C:\Users\tatam\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\using-bridge` | Code 0 — `Skill is valid!` | Structure du skill. |
+| `python -X utf8 <skill-creator>/scripts/quick_validate.py skills/using-bridge` | Code 0 — `Skill is valid!` | Structure du skill ; chemin local anonymisé. |
 | `git diff --check` | Code 0 | Espaces et marqueurs de conflit du diff. |
 
 Le premier passage complet avait 521 succès et deux échecs d'attentes de test : elles calculaient les octets du prompt avec le budget par défaut. Les tests comparent désormais le prompt effectivement transmis au sous-processus et son plafond réel ; le second passage a 523 succès. Après la découverte et la correction R9, un nouveau passage complet a 527 succès. Le build et les huit contrôles navigateur ont également été relancés avec succès après ce dernier changement. Le premier lancement du validateur Python utilisait l'encodage Windows par défaut ; l'exécution explicite UTF-8 ci-dessus a réussi.

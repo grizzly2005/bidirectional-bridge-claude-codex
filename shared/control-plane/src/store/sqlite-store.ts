@@ -28,12 +28,15 @@ import {
   type EventType,
   type Lease,
   type LeaseId,
+  type MemoryNote,
+  type MemoryScope,
   type StatusUpdate,
   type Task,
   type TaskAttempt,
   type TaskId,
   type TaskState,
   type VerificationResult,
+  memoryScopeKey,
 } from "@bridge/protocol";
 import type {
   AttemptTelemetryQuery,
@@ -43,6 +46,8 @@ import type {
   EventAppend,
   EventQuery,
   IdempotencyRecord,
+  MemoryChangeQuery,
+  MemoryNoteQuery,
   StateStore,
   TaskQuery,
 } from "./state-store.js";
@@ -72,7 +77,7 @@ export interface SqliteStoreOptions {
   readonly onJournalFallback?: (requested: string, actual: string, reason: string) => void;
 }
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 /** Bound concurrent native-server startup without failing immediately on schema/WAL locks. */
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -239,6 +244,30 @@ CREATE TABLE IF NOT EXISTS attempt_observations (
   json TEXT NOT NULL,
   PRIMARY KEY(task_id, attempt)
 );
+
+-- Shared memory: one immutable row per revision. scope_key is memoryScopeKey(scope);
+-- the qualifier columns keep global contexts as explicit NULLs. change_cursor is the id
+-- of the memory.updated event the caller appended in the same transaction.
+CREATE TABLE IF NOT EXISTS memory_notes (
+  scope_key           TEXT NOT NULL,
+  namespace           TEXT NOT NULL,
+  context_id          TEXT NOT NULL,
+  branch              TEXT,
+  application_version TEXT,
+  epoch               TEXT,
+  note_key            TEXT NOT NULL COLLATE BINARY,
+  revision            INTEGER NOT NULL CHECK (revision >= 1),
+  change_cursor       INTEGER NOT NULL UNIQUE CHECK (change_cursor >= 1),
+  lifecycle           TEXT NOT NULL CHECK (lifecycle IN ('active', 'superseded', 'archived')),
+  at                  INTEGER NOT NULL,
+  json                TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scope_key_revision ON memory_notes(scope_key, note_key, revision);
+CREATE INDEX IF NOT EXISTS idx_memory_scope_cursor ON memory_notes(scope_key, change_cursor);
+CREATE TRIGGER IF NOT EXISTS memory_notes_no_update BEFORE UPDATE ON memory_notes
+BEGIN SELECT RAISE(ABORT, 'memory note revisions are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS memory_notes_no_delete BEFORE DELETE ON memory_notes
+BEGIN SELECT RAISE(ABORT, 'memory note revisions are immutable'); END;
 `;
 
 type Row = Record<string, unknown>;
@@ -339,6 +368,8 @@ export class SqliteStateStore implements StateStore {
       }
     }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_verif_task_attempt ON verifications(task_id, attempt, id)");
+    // v6 only adds the memory_notes table, its indexes and immutability triggers through
+    // DDL; no historical row is rewritten and no memory note is synthesized from history.
   }
 
   private configureJournal(
@@ -870,8 +901,123 @@ export class SqliteStateStore implements StateStore {
     return rows.map(row => JSON.parse(row["json"] as string) as AttemptObservation);
   }
 
+  /* ---------------- shared memory ---------------- */
+
+  getMemoryNote(scope: MemoryScope, key: string, before_cursor?: number): MemoryNote | undefined {
+    if (before_cursor !== undefined) cursorArgument("before_cursor", before_cursor);
+    const row = this.db
+      .prepare(`SELECT json FROM memory_notes WHERE scope_key = ? AND note_key = ?${before_cursor === undefined ? ""
+        : " AND change_cursor <= ?"} ORDER BY revision DESC LIMIT 1`)
+      .get(...(before_cursor === undefined
+        ? [memoryScopeKey(scope), key] : [memoryScopeKey(scope), key, before_cursor])) as Row | undefined;
+    return row ? (JSON.parse(row["json"] as string) as MemoryNote) : undefined;
+  }
+
+  insertMemoryNote(note: MemoryNote, expected_revision: number): void {
+    cursorArgument("expected_revision", expected_revision);
+    if (note.revision !== expected_revision + 1) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Memory note revision must follow expected_revision",
+        { key: note.key, expected_revision, revision: note.revision });
+    }
+    if (!Number.isSafeInteger(note.change_cursor) || note.change_cursor < 1) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Memory change_cursor must be a positive event id",
+        { key: note.key, change_cursor: note.change_cursor });
+    }
+    const scopeKey = memoryScopeKey(note.scope);
+    this.transaction(() => {
+      const current = this.db
+        .prepare("SELECT COALESCE(MAX(revision), 0) AS r FROM memory_notes WHERE scope_key = ? AND note_key = ?")
+        .get(scopeKey, note.key) as Row;
+      const current_revision = Number(current["r"]);
+      if (current_revision !== expected_revision) {
+        throw new BridgeError(ErrorCode.REVISION_CONFLICT, "Memory note changed since expected_revision; reread before merging",
+          { key: note.key, expected_revision, current_revision });
+      }
+      const latest = Number((this.db.prepare("SELECT COALESCE(MAX(change_cursor), 0) AS c FROM memory_notes").get() as Row)["c"]);
+      if (note.change_cursor <= latest) {
+        throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Memory change_cursor must be globally increasing",
+          { key: note.key, change_cursor: note.change_cursor, latest_change_cursor: latest });
+      }
+      this.db
+        .prepare(
+          `INSERT INTO memory_notes(scope_key, namespace, context_id, branch, application_version, epoch,
+                                    note_key, revision, change_cursor, lifecycle, at, json)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .run(
+          scopeKey,
+          note.scope.namespace,
+          note.scope.context_id,
+          note.scope.branch,
+          note.scope.application_version,
+          note.scope.epoch,
+          note.key,
+          note.revision,
+          note.change_cursor,
+          note.lifecycle,
+          note.at,
+          JSON.stringify(note),
+        );
+    });
+  }
+
+  listMemoryNotes(query: MemoryNoteQuery): MemoryNote[] {
+    cursorArgument("before_cursor", query.before_cursor);
+    limitArgument(query.limit);
+    if (query.keys?.length === 0 || query.lifecycles?.length === 0) return [];
+    // Select each key's latest revision inside the snapshot first; filters then apply to
+    // that revision only, so a newer archived revision hides every older active one.
+    const where = [
+      "m.scope_key = ?",
+      "m.change_cursor <= ?",
+      `NOT EXISTS (SELECT 1 FROM memory_notes n WHERE n.scope_key = m.scope_key AND n.note_key = m.note_key
+                   AND n.revision > m.revision AND n.change_cursor <= ?)`,
+    ];
+    const params: unknown[] = [memoryScopeKey(query.scope), query.before_cursor, query.before_cursor];
+    if (query.lifecycles) {
+      where.push(`m.lifecycle IN (${query.lifecycles.map(() => "?").join(",")})`);
+      params.push(...query.lifecycles);
+    }
+    if (query.keys) {
+      where.push(`m.note_key IN (${query.keys.map(() => "?").join(",")})`);
+      params.push(...query.keys);
+    }
+    if (query.after_key !== undefined) {
+      where.push("m.note_key > ?");
+      params.push(query.after_key);
+    }
+    params.push(query.limit);
+    const rows = this.db
+      .prepare(`SELECT m.json FROM memory_notes m WHERE ${where.join(" AND ")} ORDER BY m.note_key ASC LIMIT ?`)
+      .all(...(params as never[])) as Row[];
+    return rows.map((row) => JSON.parse(row["json"] as string) as MemoryNote);
+  }
+
+  listMemoryChanges(query: MemoryChangeQuery): MemoryNote[] {
+    cursorArgument("after", query.after);
+    cursorArgument("before_cursor", query.before_cursor);
+    limitArgument(query.limit);
+    const rows = this.db
+      .prepare(`SELECT json FROM memory_notes WHERE scope_key = ? AND change_cursor > ? AND change_cursor <= ?
+                ORDER BY change_cursor ASC LIMIT ?`)
+      .all(memoryScopeKey(query.scope), query.after, query.before_cursor, query.limit) as Row[];
+    return rows.map((row) => JSON.parse(row["json"] as string) as MemoryNote);
+  }
+
   close(): void {
     this.db.close();
+  }
+}
+
+function cursorArgument(name: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new BridgeError(ErrorCode.INVALID_ARGUMENT, `${name} must be a non-negative integer`, { [name]: value });
+  }
+}
+
+function limitArgument(limit: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "limit must be a positive integer", { limit });
   }
 }
 

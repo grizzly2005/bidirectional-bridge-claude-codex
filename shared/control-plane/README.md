@@ -5,7 +5,7 @@ state separate from the original checkout and release state.
 
 ## Schema 5 and verification attempts
 
-The writable control-plane store migrates historical schemas 1–4 to schema 5 in one
+The writable control-plane store migrates historical schemas 1–5 to schema 6 in one
 transaction. It adds nullable `attempt` columns to `verifications` and `deliverables`,
 then creates the verification attempt index. Historical IDs, JSON, other fields, and
 events remain intact. Historical rows retain `attempt = NULL`: neither timestamps nor
@@ -24,13 +24,27 @@ to inspect that attempt, or `null` to inspect the rows whose attempt is unknown.
 Historical or prior-attempt passes cannot satisfy a new empty `COMPLETE`; old failures
 cannot reject a fresh pass. Tasks recovered from schema 4 must provide new verification.
 
-Schema 4 release code refuses schema 5 state. Opening the original database with this
+Older schema-4/5 release code refuses schema 6 state. Opening the original database with this
 experimental store would make it incompatible with that release; use a separate state
 directory and retain a backup before any intended production migration. There is no
 automatic downgrade. The tracking reader accepts schemas 4 and 5 without migration or
 writes. In schema 5 it counts only the current attempt, including canonical final checks;
 schema 4 retains its historical totals because their freshness is unknown. The offline
-doctor discovers the source-supported schema from `SCHEMA_VERSION`.
+doctor discovers the source-supported schema from `SCHEMA_VERSION`. The reader also accepts
+schema 6 with the same attempt-freshness semantics as schema 5.
+
+## Shared working-memory revisions (schema 6)
+
+`ControlPlane.memory` exposes upsert, getContext and getChanges. Schema 6 adds immutable
+`memory_notes` revisions without altering canonical task, artifact or audit data. Exact
+namespace/context/branch/version/epoch scope and key identify a note. A write binds author,
+run/task/attempt from the caller's owned current task; expected_revision and idempotency
+prevent silent overwrite. The note, `memory.updated` event and retry cache commit atomically.
+
+Context reads default to current active notes, preserve artifact IDs/hashes and report source
+integrity without loading bodies. They have a byte budget and stable snapshot/key pagination.
+Changes return all revisions, including superseded/archived, with a last-delivered cursor.
+See [shared-memory.md](../../docs/shared-memory.md) for the MCP contract and restart test.
 
 ## Preserving a verification-rejected result
 

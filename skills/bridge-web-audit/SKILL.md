@@ -15,6 +15,21 @@ Use the user's capture tools. The current executable MVP accepts its versioned J
 
 Keep retained bytes, derived JSON and interpretation separate. The hash binds the retained representation; it does not establish identity, policy, causality or impact. A 200 error, login redirect, timeout, copied source or fired hook is not a vulnerability. Credential headers resolve from environment references at execution and are redacted in the retained request; response data can still contain private information.
 
+## Resume shared work
+
+Use `memory_get_context` on entry for the exact bug-bounty program, branch, application version
+and evidence epoch; load only useful working notes and source references. Inspect reference
+integrity and the campaign before relying on a note. Resume from the saved scope/change_cursor
+with `memory_get_changes`, paging without skipping to head_cursor. At handoff, record meaningful
+observations, missing witnesses and pending work with `memory_upsert`, using the current owned
+task and the revision read. On a conflict, reread and merge.
+Use the native manager for these MCP calls; delegated Codex workers receive the selected
+context through input artifacts because their project bridge MCP is disabled. Persist their
+proposed notes as manager with references to the worker output and the actual writer's task.
+Keep the campaign as the sole canonical hypothesis/evidence ledger. For abandoned work, preserve reason, tested conditions
+and reopening trigger; an active working note is never an oracle-confirmed vulnerability.
+Archive or supersede temporary notes when their context changes; earlier revisions remain.
+
 ## Choose and verify an investigation
 
 Write competing predictions, explicit prerequisites, their capture predicates and a potential refutation. Run `plan` for a deterministic ranking with cost/risk/discrimination reasons. Its score is a documented heuristic, not measured information gain or a probability. It cannot replace a business decision or supply missing credentials.
