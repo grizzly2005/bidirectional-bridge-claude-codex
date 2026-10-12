@@ -552,8 +552,11 @@ export class Orchestrator {
       const task = this.cp.tasks.get(task_id);
       const execution = this.cp.store.getExecution(task_id);
       if (!execution || execution.phase === "STOPPED" || execution.phase === "QUARANTINED" || Date.now() >= deadline) {
-        return { task_id, state: task.state, runtime_stop_confirmed: execution?.runtime_stop_confirmed ?? true,
-          cancelled: task.state === TaskState.CANCELLED };
+        // Another process may commit finalization between the separate task/execution reads.
+        // Once the execution is terminal, reread the task rather than return its old snapshot.
+        const finalTask = task.state === TaskState.CANCELLED ? task : this.cp.tasks.get(task_id);
+        return { task_id, state: finalTask.state, runtime_stop_confirmed: execution?.runtime_stop_confirmed ?? true,
+          cancelled: finalTask.state === TaskState.CANCELLED };
       }
       await new Promise(resolve => setTimeout(resolve, 25));
     } while (true);

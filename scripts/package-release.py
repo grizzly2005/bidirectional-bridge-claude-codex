@@ -12,9 +12,11 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIST_DIRS = (
     "shared/protocol/dist", "shared/control-plane/dist", "shared/mcp-server-core/dist",
-    "claude/claude-side/dist", "codex/codex-side/dist",
+    "claude/claude-side/dist", "codex/codex-side/dist", "shared/web-audit/dist",
 )
 WORKSPACES = tuple(pathlib.PurePosixPath(p).parent.as_posix() for p in DIST_DIRS)
+# Web audit has its own experimental module version; bridge packages share the checkpoint.
+INDEPENDENT_WORKSPACES = frozenset({"shared/web-audit"})
 
 
 def git(*args):
@@ -34,6 +36,40 @@ def safe_name(name):
 def private_path(text):
     # A drive prefix must start a value/token: the trailing 's:/' in 'https://' is a URL.
     return re.search(r'(?:^|[\s"(=])(?:[A-Za-z]:[\\/]|/home/|/Users/|/mnt/[a-z]/Users/)', text) is not None
+
+
+def validate_package_versions(source):
+    root = json.loads(source["package.json"][0])
+    version = root["version"]
+    if not re.fullmatch(r"0\.[0-9]+\.[0-9]+", version):
+        raise ValueError("expected a pre-1.0 semantic version")
+    if f'BRIDGE_VERSION = "{version}"' not in source["shared/protocol/src/index.ts"][0].decode():
+        raise ValueError("runtime release identity is stale")
+    declared = {pathlib.PurePosixPath(name).parent.as_posix() for name in source
+                if name.endswith("/package.json")
+                and any(pathlib.PurePosixPath(name).parent.match(pattern)
+                        for pattern in root["workspaces"])}
+    if declared != set(WORKSPACES):
+        raise ValueError("declared workspace and compiled distribution inventories differ")
+    packages = {}
+    for path in ("", *WORKSPACES):
+        name = (path + "/" if path else "") + "package.json"
+        package = json.loads(source[name][0])
+        if not package.get("private") or not re.fullmatch(r"0\.[0-9]+\.[0-9]+", package["version"]):
+            raise ValueError(f"workspace version/private flag differs: {name}")
+        if path not in INDEPENDENT_WORKSPACES and package["version"] != version:
+            raise ValueError(f"bridge workspace version differs: {name}")
+        packages[path] = package
+    versions = {package["name"]: package["version"] for package in packages.values()}
+    for package in packages.values():
+        for name, requirement in package.get("dependencies", {}).items():
+            if name.startswith("@bridge/") and requirement != versions.get(name):
+                raise ValueError("internal dependency version differs")
+    lock = json.loads(source["package-lock.json"][0])
+    for path, package in packages.items():
+        if lock["packages"][path]["version"] != package["version"]:
+            raise ValueError("lockfile workspace version differs")
+    return version, {path or ".": package["version"] for path, package in packages.items()}
 
 
 def archive(destination, prefix, entries, timestamp):
@@ -75,23 +111,7 @@ def main():
         source[name] = (git("cat-file", "blob", object_id.decode()), int(mode, 8) & 0o777)
     if set(source) != allowed:
         raise ValueError("Git tree and public material manifest differ")
-    version = json.loads(source["package.json"][0])["version"]
-    if not re.fullmatch(r"0\.[0-9]+\.[0-9]+", version):
-        raise ValueError("expected a pre-1.0 semantic version")
-    if f'BRIDGE_VERSION = "{version}"' not in source["shared/protocol/src/index.ts"][0].decode():
-        raise ValueError("runtime release identity is stale")
-    for path in ("", *WORKSPACES):
-        manifest_name = (path + "/" if path else "") + "package.json"
-        package = json.loads(source[manifest_name][0])
-        if package["version"] != version or not package.get("private"):
-            raise ValueError(f"workspace version/private flag differs: {manifest_name}")
-        for name, requirement in package.get("dependencies", {}).items():
-            if name.startswith("@bridge/") and requirement != version:
-                raise ValueError("internal dependency version differs")
-    lock = json.loads(source["package-lock.json"][0])
-    for path in ("", *WORKSPACES):
-        if lock["packages"][path]["version"] != version:
-            raise ValueError("lockfile workspace version differs")
+    version, workspace_versions = validate_package_versions(source)
     built = {}
     for folder in DIST_DIRS:
         directory = ROOT / folder
@@ -117,6 +137,7 @@ def main():
         "schema_version": 1, "version": version, "tag": "v" + version,
         "source_commit": commit, "source_tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
         "node_requirement": json.loads(source["package.json"][0])["engines"]["node"],
+        "workspace_versions": workspace_versions,
         "source_file_count": len(source), "compiled_file_count": len(built),
         "lockfile_sha256": digest(source["package-lock.json"][0]),
         "files": {name: digest(data) for name, (data, _) in sorted({**source, **built}.items())},
@@ -127,11 +148,13 @@ def main():
     archive(output / ("bidirectional-bridge-" + version + "-source.zip"), prefix, source, timestamp)
     archive(output / ("bidirectional-bridge-" + version + "-compiled.zip"), prefix,
             {**source, **built, "RELEASE.json": (encoded, 0o644)}, timestamp)
-    skill = {name.removeprefix("skills/using-bridge/"): value for name, value in source.items()
-             if name.startswith("skills/using-bridge/")}
-    if "SKILL.md" not in skill:
-        raise ValueError("canonical skill missing")
-    archive(output / ("using-bridge-" + version + ".zip"), "using-bridge/", skill, timestamp)
+    for skill_name in ("using-bridge", "bridge-web-audit"):
+        skill_prefix = "skills/" + skill_name + "/"
+        skill = {name.removeprefix(skill_prefix): value for name, value in source.items()
+                 if name.startswith(skill_prefix)}
+        if "SKILL.md" not in skill:
+            raise ValueError(f"canonical skill missing: {skill_name}")
+        archive(output / (skill_name + "-" + version + ".zip"), skill_name + "/", skill, timestamp)
     sbom = json.loads(pathlib.Path(args.sbom).read_text(encoding="utf-8-sig"))
     sbom_text = json.dumps(sbom, indent=2, sort_keys=True) + "\n"
     if private_path(sbom_text):

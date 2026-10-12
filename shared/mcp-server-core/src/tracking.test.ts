@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, existsSync, lstatSync, rmSync, symlinkSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 import { createRequire } from "node:module";
 import { request as httpRequest } from "node:http";
 import type { DatabaseSync as DatabaseCtor } from "node:sqlite";
@@ -412,7 +412,7 @@ describe("browser display resolves a trusted system launcher", () => {
     expect(windows.launcher.cwd).toBe(join("C:\\Windows", "System32"));
     expect(windows.launcher.args).toEqual(["url.dll,FileProtocolHandler", target]);
     expect(windows.probed).toEqual([join("C:\\Windows", "System32", "rundll32.exe"), join("C:\\Windows", "System32", "url.dll")]);
-    for (const path of windows.probed) expect(isAbsolute(path)).toBe(true);
+    for (const path of windows.probed) expect(win32.isAbsolute(path)).toBe(true);
 
     const mac = probe({ platform: "darwin", env: {} });
     expect(mac.launcher).toEqual({ command: "/usr/bin/open", args: [target], cwd: "/usr/bin" });

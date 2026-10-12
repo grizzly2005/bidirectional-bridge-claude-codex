@@ -132,6 +132,75 @@ claude mcp list
 
 On non-Windows systems, use the equivalent installed `codex mcp list` command.
 
+## Experimental branch and schema 6
+
+The web-audit and shared-memory additions are unreleased. The published v0.3.1 archives
+contain the older checkpoint, so install the experimental source branch explicitly:
+
+```powershell
+git clone --branch grizzly/bridge-web-audit-mvp-20261012 https://github.com/grizzly2005/bidirectional-bridge-claude-codex.git bridge-experimental
+cd bridge-experimental
+npm ci
+npm run build
+```
+
+This command requires the branch to have been pushed. For an unpublished branch, use a local
+source checkout/archive supplied by its maintainer instead, then run the same install/build
+commands. No dependencies, build output or runtime state from the maintainer are needed.
+
+A freshly prepared compiled archive already contains the six workspace distributions and
+tracking resource: run `npm ci` after extraction; rebuilding is optional. Source archives
+and Git checkouts require `npm run build`. This distinction does not add the experimental
+features to the previously published v0.3.1 archives.
+
+On Windows, npm also needs the inherited `ComSpec` variable. An agent harness or Git Bash
+session that removes it can fail during `npm ci` with `ERR_INVALID_ARG_TYPE`. Restore the
+Windows command-interpreter path in that shell, then rerun the install. For PowerShell:
+
+```powershell
+$env:ComSpec = Join-Path $env:SystemRoot 'System32/cmd.exe'
+npm ci
+```
+
+Before opening either native client, give both project configurations the same separate
+database. For Codex, use these arguments in the existing `.codex/config.toml` entry:
+
+```toml
+args = ["scripts/native-bridge-mcp.mjs", "--caller", "codex", "--delegation", "allow", "--workspace", ".", "--db", ".bridge/experimental-memory.db"]
+```
+
+For Claude, append these two elements to the existing `args` array in `.mcp.json`:
+
+```json
+"--db", ".bridge/experimental-memory.db"
+```
+
+Keep its caller set to `claude`. These paths resolve from the configured project workspace.
+The defaults remain `.bridge/bridge.db`; selecting a branch name alone does not isolate a
+database, especially when using a linked installation with an external project.
+
+The experimental writer migrates schemas 1–5 to **6** on open and retains their history.
+Schema-4/5 release binaries cannot reopen the upgraded database. Use a new experimental
+database for normal use. To assess migration, close the writers, copy the old database using
+SQLite's backup mechanism, then point the experimental client at that copy. Keep the original
+for the older binary; rollback means reopening that original with its matching release.
+Campaign JSON remains independent and single-writer.
+
+Verify the self-contained examples from this installation:
+
+```powershell
+node scripts/test-shared-memory.mjs
+node shared/web-audit/examples/cli-smoke.mjs
+```
+
+The memory test discovers `memory_get_context`, `memory_upsert` and `memory_get_changes`,
+then checks process restart continuity, artifact references, history and a concurrent edit.
+The web smoke exercises the JSON/CLI workflow against loopback. Neither invokes a model or
+an external program target. Follow the [development tutorial](tutorials/shared-memory-development.md)
+or [web investigation tutorial](tutorials/shared-memory-web-audit.md) for a real agent handoff.
+Delegated Codex workers receive memory through their manager and input/output artifacts;
+their project bridge MCP is disabled.
+
 ## Local state
 
 The bridge stores coordination data at `.bridge/bridge.db` by default. Runtime databases,

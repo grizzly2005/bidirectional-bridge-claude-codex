@@ -1,7 +1,9 @@
 # Resume an authorized web investigation
 
-Use the [web-audit MVP](../web-audit-experimental.md) and experimental native MCP memory in
-the same project. Campaign JSON stays single-writer. The memory is a short working context
+Build the [experimental installation](../installation.md#experimental-branch-and-schema-6)
+and point both native clients at `--db .bridge/experimental-memory.db` in the same project.
+Use the [web-audit MVP](../web-audit-experimental.md) with that shared working memory.
+Campaign JSON stays single-writer. The memory is a short working context
 with references; it does not rerun capture, create evidence or declare a vulnerability.
 
 ## Before closing Codex

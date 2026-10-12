@@ -244,6 +244,39 @@ describe("durable execution contracts", () => {
     expect(cpDurations()).toMatchObject({ queue_duration_ms: null, startup_duration_ms: null, work_duration_ms: null,
       delegation_elapsed_ms: null, attempt_wall_duration_ms: null, runtime_duration_ms: null, runtime_duration_source: null });
   });
+  it("reports the final task when another process stops between cancellation poll reads", async () => {
+    const { cp, dir, db, orchestrator } = setup(true);
+    const running = worker(dir, db, "cancel-read-race", "cancel");
+    await until(() => cp.tasks.list().some(t => cp.attempts.get(t.task_id, 0)?.execution_handle));
+    const task = cp.tasks.list()[0]!;
+    const readTask = cp.tasks.get.bind(cp.tasks);
+    let interleaved = false;
+    const read = vi.spyOn(cp.tasks, "get").mockImplementation(id => {
+      const snapshot = readTask(id);
+      const execution = cp.store.getExecution(id);
+      if (id === task.task_id && !interleaved && snapshot.state === TaskState.WORKING &&
+          execution?.cancel_requested_at !== null && execution?.cancel_requested_at !== undefined) {
+        // Pause this reader after its task snapshot. The independent worker consumes the
+        // persisted cancellation and atomically commits its actual final task/execution.
+        interleaved = true;
+        const deadline = Date.now() + 4000;
+        while (cp.store.getExecution(id)?.phase !== "STOPPED" && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        expect(cp.store.getExecution(id)?.phase).toBe("STOPPED");
+        expect(readTask(id).state).toBe(TaskState.CANCELLED);
+      }
+      return snapshot;
+    });
+    try {
+      expect(await orchestrator.cancelTask(task.task_id, "codex")).toMatchObject({
+        state: TaskState.CANCELLED, cancelled: true, runtime_stop_confirmed: true,
+      });
+      expect(interleaved).toBe(true);
+      expect((await running).result.error.code).toBe(ErrorCode.TASK_CANCELLED);
+      expect(cp.leases.listLive()).toHaveLength(0);
+    } finally { read.mockRestore(); }
+  });
 });
 
 import { normalizeAttemptTelemetry } from "./attempt-service.js";

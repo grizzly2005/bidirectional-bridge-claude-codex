@@ -51,6 +51,15 @@ number, because a `0.x` number does not communicate impact on its own.
 
 ## Release checklist
 
+The current experimental branch is still an unreleased consolidation candidate. Local
+certification hashes its public material; it does not certify production readiness or
+change the published v0.3.1 tag/assets. Before a new checkpoint, choose a new version,
+update the bridge packages/runtime identity/lockfile and add matching release notes.
+The web-audit module currently retains its independent 0.1.0 version; packaging verifies
+each workspace against its own lockfile entry and checks internal dependency versions.
+Source and compiled archives include all six workspaces, memory tutorials and client skill
+mirrors. Separate canonical archives are produced for `using-bridge` and `bridge-web-audit`.
+
 A checkpoint is only prepared after these gates pass locally, with real exit codes:
 
 ```bash
@@ -62,6 +71,9 @@ node scripts/certification-manifest.mjs
 npm run skills:check
 npm run links:check
 npm run test:tracking-ui
+node scripts/test-shared-memory.mjs
+node shared/web-audit/examples/cli-smoke.mjs
+python scripts/test-release-package.py
 npm audit --audit-level=low
 ```
 

@@ -34,6 +34,7 @@ const PACKAGES = {
   "mcp-server-core": "shared/mcp-server-core",
   "claude-side": "claude/claude-side",
   "codex-side": "codex/codex-side",
+  "web-audit": "shared/web-audit",
 };
 
 const log = (...a) => console.error(...a);

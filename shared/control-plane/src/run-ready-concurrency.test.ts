@@ -17,13 +17,20 @@ function start(script: string, directory: string, database: string) {
   cleanup.push(() => { if (child.exitCode === null) child.kill(); });
   let stdout = "", stderr = "";
   let announce!: () => void;
-  const ready = new Promise<void>((resolve, reject) => { announce = resolve; child.once("error", reject); });
+  let rejectReady!: (error: Error) => void;
+  let announced = false;
+  const ready = new Promise<void>((resolve, reject) => {
+    announce = () => { announced = true; resolve(); };
+    rejectReady = reject;
+    child.once("error", reject);
+  });
   child.stdout!.on("data", data => { stdout += String(data); if (stdout.startsWith("ready\n")) announce(); });
   child.stderr!.on("data", data => { stderr += String(data); });
   child.stdin!.on("error", () => {});
   const done = new Promise<{ candidates: number; invokes: number; outcomes: Array<{ task_id: string; error: unknown }> }>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", code => {
+      if (!announced) rejectReady(new Error(`Local scheduler exited before ready (${code}): ${stderr}`));
       if (code !== 0) { reject(new Error(`Local scheduler process exited ${code}: ${stderr}`)); return; }
       try { resolve(JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!)); } catch (error) { reject(error); }
     });
@@ -32,6 +39,16 @@ function start(script: string, directory: string, database: string) {
   void ready.catch(() => undefined); void done.catch(() => undefined);
   return { ready, done, go: () => child.stdin!.end("go\n") };
 }
+
+it("reports a scheduler startup failure instead of leaving the ready barrier pending", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bridge-run-ready-startup-"));
+  cleanup.push(() => rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const script = join(directory, "failed-fixture.mjs");
+  writeFileSync(script, "process.stderr.write('fixture startup rejected'); process.exit(3);");
+  const process = start(script, directory, join(directory, "unused.db"));
+  await expect(process.ready).rejects.toThrow("Local scheduler exited before ready (3): fixture startup rejected");
+  await expect(process.done).rejects.toThrow("Local scheduler process exited 3");
+});
 
 it("executes one existing task once when independent processes observed the same PENDING set", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bridge-run-ready-processes-"));

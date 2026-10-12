@@ -48,6 +48,8 @@ jobs:
       - run: npm test
       - run: npm run skills:check
       - run: npm run links:check
+      - run: node scripts/test-shared-memory.mjs
+      - run: node shared/web-audit/examples/cli-smoke.mjs
       - run: node docs/tools/check-doc-links.mjs
       - run: node scripts/certification-manifest.mjs
       - run: npm audit --audit-level=low
