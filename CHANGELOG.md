@@ -58,6 +58,8 @@ No changes recorded yet.
 
 ### Security
 
+- Extract Claude scope directories with string scans instead of polynomial glob-stripping
+  expressions; preserve directory grants and bound long wildcard input.
 - Raise the MCP SDK floor to 1.31.0 and refresh the locked transitive proxy-addr dependency
   to 2.0.8 for [GHSA-6qxp-vccf-f47h](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-6qxp-vccf-f47h)
   and [GHSA-jqcg-44mw-7w3h](https://github.com/jshttp/proxy-addr/security/advisories/GHSA-jqcg-44mw-7w3h).

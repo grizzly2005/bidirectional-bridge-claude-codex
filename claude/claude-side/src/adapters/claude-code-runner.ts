@@ -830,7 +830,16 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       // containing directory, since --add-dir takes directories, not patterns.
       const dirs = new Set<string>();
       for (const p of invocation.spec.scope.paths) {
-        const dir = p.replace(/\/?\*\*.*$/, "").replace(/\/[^/]*[*?].*$/, "");
+        // Scan once for each marker: unanchored glob-stripping regexes can backtrack
+        // quadratically on long wildcard runs followed by a Unicode line separator.
+        const globstar = p.indexOf("**");
+        let dir = globstar < 0 ? p : p.slice(0, globstar - (p[globstar - 1] === "/" ? 1 : 0));
+        const star = dir.indexOf("*"), question = dir.indexOf("?");
+        const wildcard = star < 0 ? question : question < 0 ? star : Math.min(star, question);
+        if (wildcard >= 0) {
+          const slash = dir.lastIndexOf("/", wildcard);
+          if (slash >= 0) dir = dir.slice(0, slash);
+        }
         if (dir && !dir.includes("*") && !dir.includes("?")) dirs.add(dir);
       }
       for (const d of dirs) args.push("--add-dir", d);
