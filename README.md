@@ -17,10 +17,12 @@ The latest published checkpoint is [v0.3.1](https://github.com/grizzly2005/bidir
 See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
 opt-in delegation tracking, downloads and verification.
 
-This unreleased experimental branch adds [web-audit assistance and bridge reliability fixes](docs/web-audit-experimental.md)
-and [shared working memory](docs/shared-memory.md). These additions are not in the published
-v0.3.1 archives. Build this branch from source and select a separate schema-v6 database for
-both clients using the [experimental installation steps](docs/installation.md#experimental-branch-and-schema-6).
+The [v0.4.0 candidate](docs/releases/v0.4.0.md) adds
+[web-audit assistance and bridge reliability fixes](docs/web-audit-experimental.md)
+and [shared working memory](docs/shared-memory.md). Its bridge packages/runtime use0.4.0,
+wire marker1.4.0 and SQLite6; the experimental web-audit module retains its own0.1.0 version.
+These additions are not in the published v0.3.1 archives. Select a separate database for both
+clients using the [installation steps](docs/installation.md#experimental-branch-and-schema-6).
 
 ## Table of contents
 

@@ -16,8 +16,8 @@ export * from "./verification.js";
 export * from "./artifact-transport.js";
 export * from "./memory.js";
 
-/** Bumped when a breaking change lands in the wire contract. */
-export const PROTOCOL_VERSION = "1.3.0";
+/** Wire capability version; minor additions preserve existing exported schema shapes. */
+export const PROTOCOL_VERSION = "1.4.0";
 
 /** Release identity; separate from the wire protocol and persisted schema versions. */
-export const BRIDGE_VERSION = "0.3.1";
+export const BRIDGE_VERSION = "0.4.0";

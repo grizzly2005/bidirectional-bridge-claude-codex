@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Exact public material for the unreleased experimental bridge: durable coordination, web-audit assistance, shared working memory, skills and release workflows.",
+  "description": "Exact public project material for the experimental v0.4.0 bridge: development coordination, shared working memory, web-audit assistance and release workflows.",
   "hash_definition": {
     "algorithm": "sha256",
     "domain_separator": "bridge-certification-manifest-v1",
@@ -191,6 +191,7 @@
     "docs/release-policy.md",
     "docs/releases/v0.3.0.md",
     "docs/releases/v0.3.1.md",
+    "docs/releases/v0.4.0.md",
     "docs/review-fixes-2026-10-03.md",
     "docs/review-fixes-2026-10-04.md",
     "docs/roadmap.md",

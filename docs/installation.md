@@ -14,7 +14,9 @@ launcher arguments may change between revisions; see [release-policy.md](release
 
 ## Install and verify
 
-For an immutable downloadable checkpoint, follow [the v0.3.1 release instructions](releases/v0.3.1.md).
+For the shared-memory/web-audit candidate, follow [the v0.4.0 notes](releases/v0.4.0.md).
+The immutable [v0.3.1 checkpoint](releases/v0.3.1.md) remains available with schema4 and
+without these additions.
 The compiled archive contains the same public source and lockfile plus generated workspace
 distributions and the bundled tracking resource. Dependencies are installed locally with
 `npm ci`; they are not copied from a publisher's `node_modules`.
@@ -138,7 +140,7 @@ The web-audit and shared-memory additions are unreleased. The published v0.3.1 a
 contain the older checkpoint, so install the experimental source branch explicitly:
 
 ```powershell
-git clone --branch grizzly/bridge-web-audit-mvp-20261012 https://github.com/grizzly2005/bidirectional-bridge-claude-codex.git bridge-experimental
+git clone --branch release/0.4.0 https://github.com/grizzly2005/bidirectional-bridge-claude-codex.git bridge-experimental
 cd bridge-experimental
 npm ci
 npm run build

@@ -11,6 +11,10 @@ explicitly.
 
 ## Unreleased
 
+No changes recorded yet.
+
+## 0.4.0 — 2026-10-12 (candidate)
+
 ### Added
 
 - Experimental web-audit workspace, JSON campaign format, CLI and skill: actor/object/state
@@ -47,6 +51,8 @@ explicitly.
   with a Codex → Claude → Codex memory example and two restart tutorials.
 - Document clean experimental installation, schema-6 migration/rollback and the manager's
   artifact-mediated memory handoff for delegated Codex workers.
+- Align the wire marker/documentation at1.4.0 and distinguish it from package0.4.0,
+  web-audit0.1.0 and SQLite6. Add release notes and candidate archive/provenance validation.
 
 ### Security
 

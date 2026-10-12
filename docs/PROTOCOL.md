@@ -1,8 +1,16 @@
-# Bridge protocol — v1.0.0
+# Bridge protocol — v1.4.0
 
 The wire contract between Claude and Codex. Normative source: JSON Schemas exported from
-`@bridge/protocol` (`SCHEMAS`). TypeScript types mirror them; where they disagree, the
-schema wins, because the two agents may validate from different toolchains.
+`@bridge/protocol` (`SCHEMAS`, plus `MemoryScopeSchema` and `MemoryNoteDraftSchema`).
+MCP tool argument shapes are also exported by the neutral server core. TypeScript types
+mirror these contracts; where they disagree, the schema wins.
+
+Protocol **1.4.0**, bridge package/runtime **0.4.0**, independently versioned web-audit
+**0.1.0**, SQLite schema **6** and memory envelope schema **1** identify different layers.
+The existing `SCHEMAS` registry and required adapter fields retain their 1.3.0 shapes.
+1.4.0 adds working-memory tools/types, an event/error and an optional adapter byte limit.
+Validation and attempt-authority repairs are stricter for formerly accepted invalid inputs;
+review the [v0.4.0 notes](releases/v0.4.0.md). SQLite migration is not a wire major-version bump.
 
 ## The model in one paragraph
 
@@ -56,9 +64,13 @@ milestone and still return an honest `PARTIAL`. A submission made straight from 
 is routed through `VERIFYING` inside the same transaction, because `DONE` is only reachable
 from `VERIFYING` — "reached DONE without being checked" stays unrepresentable.
 
-The deliverable row and the state change commit together. A rejected deliverable — the
-verification gate refusing `COMPLETE` without evidence — leaves the task exactly where it
-was, with no event written.
+The deliverable row and the state change commit together. Direct `bridge_submit_deliverable`
+rejection rolls back the submission; it leaves the prior task/deliverable/event state intact.
+For an adapter runtime result, the orchestrator preserves a schema-valid `COMPLETE` refused
+specifically by `VerificationRejectedError` as `PARTIAL`, retaining artifacts/checks and
+blocking the task. The wire error is `INVALID_ARGUMENT`, not a new error code.
+Malformed payloads, storage/authority failures and unconfirmed runtime stops keep their
+own failure handling and cannot authorize a passing result.
 
 `summary` is a bounded synthesis, not storage for a substantive report. Adapters preserve
 long-form output through durable artifact ids (inline artifacts for read-only reports when
@@ -118,8 +130,11 @@ Two gates are enforced, not advisory:
   dependency is `DONE`. Checked at start, not at claim, so an agent may claim and prepare
   while an upstream task finishes.
 - **Verification gate** — a `COMPLETE` deliverable is rejected unless at least one
-  verification passed and none failed. An agent that cannot run a check submits `PARTIAL`,
-  or passes an explicit waiver that is recorded in the event log.
+  current-attempt verification passed and none failed. `passed` must agree with a known
+  exit code, and non-manual command checks require an exit code. Read-only tasks must return
+  `changed_scope: []`. An agent unable to run checks submits `PARTIAL`.
+  The low-level host API has a separately recorded `allowUnverified` waiver option;
+  ordinary MCP/delegated completion does not expose that override.
 
 ## Write scopes and leases
 
@@ -127,6 +142,12 @@ A scope is a set of repo-relative glob patterns (`*`, `**`, `?`). Overlap is com
 `globsOverlap`, which is deliberately conservative: when it cannot prove two patterns are
 disjoint it reports a conflict. A false conflict costs a retry; a false clearance costs
 corrupted files.
+
+Paths must be project-relative; absolute/drive/control-character paths, empty segments and
+parent `..` segments are rejected. Ordinary names containing `..` remain valid. A scope
+consisting only of the reserved `(no-write)` namespace represents read-only execution:
+it preserves task/lease authority, grants no path writes and does not conflict with writers.
+Do not mix that namespace with write paths. Read-only results require `changed_scope: []`.
 
 - Leases are **time-bounded** when no possibly running execution is attached. An expired
   lease without positive runtime stop evidence remains conflicting in `QUARANTINED` state.
@@ -167,6 +188,8 @@ this is not containment of an adversarial detached descendant.
 | `TELEMETRY_INCOMPLETE` | no | Strict observation criterion not met; business work may be complete |
 | `OPERATION_IN_PROGRESS` | no | Existing operation, admission, provider wait or uncertain authorized launch |
 | `TASK_CANCELLED` | no | Durable targeted cancellation |
+| `REVISION_CONFLICT` | no | Working-memory revision changed; reread and explicitly merge |
+| `UNIMPLEMENTED` | no | Operation is deferred or unsupported by this build |
 | `INTERNAL` | **yes** | Unclassified fault |
 
 Branch on `code` and typed `runtime_failure`, not message text. Runtime failure categories
@@ -188,9 +211,14 @@ replays a finished frozen outcome after restart. Launch authorization precedes i
 the runtime; final outcome persistence shares the business transaction. An abandoned
 prelaunch reservation may be reclaimed. An abandoned authorized operation becomes uncertain
 and quarantined; it is never automatically invoked a second time. Long runtime calls and
-artifact byte reads occur outside SQLite transactions. Schema v4 adds operation, execution
-and observation records; existing v1-v3 history is migrated transactionally. A future or
-malformed schema is refused before opening the original database for writes.
+artifact byte reads occur outside SQLite transactions. The v4 operation, execution and
+observation records remain. Schema v5 associates checks and deliverables with their known
+attempt; unknown historical attempts remain null and do not validate a later attempt.
+Schema v6 adds immutable working-memory revisions. Existing v1-v5 history is migrated
+transactionally. A future or malformed schema is refused before opening the original
+database for writes. Older schema4/5 release writers cannot reopen a database upgraded to6.
+Use a separate database or migrate a verified backup; see [shared-memory.md](shared-memory.md)
+and the [v0.4.0 migration instructions](releases/v0.4.0.md#database-migration-and-rollback).
 
 ## Delegation
 
@@ -275,6 +303,10 @@ Rules:
 5. Report through `ctx` (`report`, `publishArtifact`, `recordVerification`, `raiseBlocker`) —
    callbacks are fenced by execution generation, owner, attempt, cancellation and live lease.
 
+`InvocationContext.max_inline_artifact_bytes` is optional. Hosts can expose the actual
+registry byte cap; legacy hosts fall back to the protocol default. UTF-8 byte limits
+include fragment metadata and preserve ordered content/hash manifests for large outputs.
+
 A reference implementation is `claude/claude-side/src/adapters/mock-codex-adapter.ts`.
 
 ## Event log
@@ -290,10 +322,14 @@ consumers; it is not a lossless pagination cursor. Event types are `EventType` i
 package; `lease.denied` records near-collisions between the agents and is written outside
 the failing transaction so it survives the rejection.
 
+`memory.updated` is appended atomically with an immutable working-note revision and its
+idempotency receipt. Its event id supplies that revision's change cursor.
+
 ## MCP tool surface
 
 Served over stdio by the agent-neutral `@bridge/mcp-server-core`; each native launcher binds
-the caller identity. Names and full descriptions live in `shared/mcp-server-core/src/tools.ts`.
+the caller identity. Names and full descriptions live in `shared/mcp-server-core/src/tools.ts`
+and `memory-tools.ts`.
 
 Discovery: `bridge_server_info`, `bridge_doctor`, `bridge_snapshot`, `bridge_list_tasks`, `bridge_get_task`, `bridge_check_scope`,
 `bridge_read_events`.
@@ -302,10 +338,21 @@ Scope: `bridge_acquire_lease`, `bridge_renew_lease`, `bridge_release_lease`.
 Execution: `bridge_set_state`, `bridge_report_status`, `bridge_publish_artifact`,
 `bridge_read_artifact`, `bridge_record_verification`, `bridge_block_task`.
 Completion: `bridge_submit_deliverable`.
+Tracking lifecycle: `bridge_tracking_open`, `bridge_tracking_close`.
 Coordination: `bridge_delegate`, `bridge_resume_task`, `bridge_resume_delegated_task`,
 `bridge_cancel_task`, `bridge_continue_task`, `bridge_repair_observation`, `bridge_recover`,
 `bridge_query_telemetry`. Direct-manager authority for cancellation, continuation and repair
 uses the same durable ancestry checks as delegated recovery; it never transfers ownership.
+
+Working memory: `memory_get_context`, `memory_upsert`, `memory_get_changes`.
+The namespace/project/branch/application-version/epoch tuple is exact; null is not a
+wildcard. Upsert uses the caller's own WORKING/VERIFYING task, expected revision and stable
+key. Context is bounded and on demand; history uses the last delivered cursor rather than
+the global head, with a fixed upper cursor while paginating. Lifecycle retains active,
+superseded and archived revisions; references carry canonical artifact ids/hashes.
+See [shared-memory.md](shared-memory.md) for the payloads and bounded restart demonstration.
+Native managers call these tools. Delegated Codex workers receive selected context and
+propose deltas through artifacts because their project bridge MCP remains disabled.
 
 Diagnostics and upgrade/rollback evidence boundaries are specified in
 [BRIDGE_RELEASE_ROLLBACK.md](BRIDGE_RELEASE_ROLLBACK.md).

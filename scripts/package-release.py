@@ -72,6 +72,23 @@ def validate_package_versions(source):
     return version, {path or ".": package["version"] for path, package in packages.items()}
 
 
+def validate_contract_versions(source):
+    protocol = source["shared/protocol/src/index.ts"][0].decode()
+    wire = re.search(r'export const PROTOCOL_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";', protocol)
+    heading = re.search(r"^# Bridge protocol — v([0-9]+\.[0-9]+\.[0-9]+)$",
+                        source["docs/PROTOCOL.md"][0].decode(), re.M)
+    database = re.search(r"const SCHEMA_VERSION = ([0-9]+);",
+                         source["shared/control-plane/src/store/sqlite-store.ts"][0].decode())
+    memory = re.search(r"export interface MemoryNote extends MemoryNoteDraft\s*\{\s*readonly schema_version: ([0-9]+);",
+                       source["shared/protocol/src/memory.ts"][0].decode())
+    if not wire or not heading or wire.group(1) != heading.group(1):
+        raise ValueError("wire version and protocol documentation differ")
+    if not database or not memory:
+        raise ValueError("persisted schema identity missing")
+    return {"protocol_version": wire.group(1), "database_schema_version": int(database.group(1)),
+            "memory_schema_version": int(memory.group(1))}
+
+
 def archive(destination, prefix, entries, timestamp):
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as target:
         for name, (data, mode) in sorted(entries.items()):
@@ -112,6 +129,7 @@ def main():
     if set(source) != allowed:
         raise ValueError("Git tree and public material manifest differ")
     version, workspace_versions = validate_package_versions(source)
+    contract_versions = validate_contract_versions(source)
     built = {}
     for folder in DIST_DIRS:
         directory = ROOT / folder
@@ -138,6 +156,7 @@ def main():
         "source_commit": commit, "source_tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
         "node_requirement": json.loads(source["package.json"][0])["engines"]["node"],
         "workspace_versions": workspace_versions,
+        **contract_versions,
         "source_file_count": len(source), "compiled_file_count": len(built),
         "lockfile_sha256": digest(source["package-lock.json"][0]),
         "files": {name: digest(data) for name, (data, _) in sorted({**source, **built}.items())},

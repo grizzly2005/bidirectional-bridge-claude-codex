@@ -57,6 +57,17 @@ class ReleaseArtifacts(unittest.TestCase):
         self.assertFalse(package.private_path('{"url":"https://registry.npmjs.org/zod/-/zod.tgz"}'))
         self.assertFalse(package.private_path('{"url":"git+https://github.com/example/repository.git"}'))
 
+    def test_stale_protocol_documentation_prevents_packaging(self):
+        names = ["shared/protocol/src/index.ts", "shared/protocol/src/memory.ts", "docs/PROTOCOL.md",
+                 "shared/control-plane/src/store/sqlite-store.ts"]
+        source = {name: ((package.ROOT / name).read_bytes(), 0o644) for name in names}
+        identities = package.validate_contract_versions(source)
+        self.assertGreater(identities["database_schema_version"], 0)
+        self.assertGreater(identities["memory_schema_version"], 0)
+        source["docs/PROTOCOL.md"] = (b"# Bridge protocol \xe2\x80\x94 v0.0.0\n", 0o644)
+        with self.assertRaisesRegex(ValueError, "wire version and protocol documentation differ"):
+            package.validate_contract_versions(source)
+
     def test_private_paths_are_rejected(self):
         for text in ('C:\\Users\\example', '{"path":"C:/Users/example"}',
                      '{"path":"/home/example/project"}', '{"path":"/mnt/c/Users/example/project"}'):
