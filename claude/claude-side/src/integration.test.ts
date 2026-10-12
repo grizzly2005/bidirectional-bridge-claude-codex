@@ -146,7 +146,10 @@ describe("claude delegates to codex", () => {
       new MockCodexAdapter({
         now: () => clock.now(),
         sleep: (ms) => clock.sleep(ms),
-        script: [{ verifications: [failingCheck("test", "npm test")] }],
+        script: [{
+          artifacts: [{ name: "failed-check-notes.md", content: "The test result needs investigation" }],
+          verifications: [failingCheck("test", "npm test")],
+        }],
       }),
     );
 
@@ -159,7 +162,13 @@ describe("claude delegates to codex", () => {
     });
 
     expect(outcome.error?.code).toBe(ErrorCode.INVALID_ARGUMENT);
-    expect(cp.tasks.get(outcome.task_id).state).toBe(TaskState.FAILED);
+    expect(cp.tasks.get(outcome.task_id).state).toBe(TaskState.BLOCKED);
+    expect(outcome.deliverable?.status).toBe(DeliverableStatus.PARTIAL);
+    expect(outcome.deliverable?.artifacts).toHaveLength(1);
+    expect(outcome.deliverable?.verification_results).toEqual([
+      expect.objectContaining({ command: "npm test", passed: false }),
+    ]);
+    expect(cp.leases.listLive()).toHaveLength(0);
   });
 
   it("retries a retryable failure up to the budget, then stops", async () => {

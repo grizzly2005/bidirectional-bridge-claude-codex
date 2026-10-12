@@ -72,6 +72,7 @@ export async function serve(options: ServeOptions): Promise<ServeHandle> {
     shutting = (async () => {
       log(`[${label}] ${reason}, shutting down`);
       try {
+        await server.orchestrator.shutdown();
         for (const adapter of options.adapters ?? []) {
           try {
             await adapter.dispose?.();

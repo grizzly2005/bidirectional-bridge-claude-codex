@@ -15,6 +15,18 @@
 import { invalidArgument } from "./errors.js";
 import type { WriteScope } from "./types.js";
 
+/** Reserved read-only namespace: retain execution fencing while granting no path writes. */
+export const READ_ONLY_SCOPE_GLOB = "(no-write)/**";
+
+function isReadOnlyPattern(pattern: string): boolean {
+  const path = normalizePath(pattern);
+  return path === "(no-write)" || path.startsWith("(no-write)/");
+}
+
+export function isReadOnlyScope(scope: WriteScope): boolean {
+  return scope.paths.length > 0 && scope.paths.every(isReadOnlyPattern);
+}
+
 /** Normalise a path or pattern: POSIX separators, no leading `./`, no trailing `/`. */
 export function normalizePath(p: string): string {
   if (typeof p !== "string" || p.length === 0) {
@@ -22,9 +34,12 @@ export function normalizePath(p: string): string {
   }
   let out = p.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
   while (out.startsWith("./")) out = out.slice(2);
-  if (out.startsWith("/")) out = out.slice(1);
+  if (out.startsWith("/") || /^[a-z]:/i.test(out) || /[\x00-\x1f\x7f]/.test(out)) {
+    throw invalidArgument("path must be repo-relative and contain no control characters", { value: p });
+  }
   while (out.endsWith("/")) out = out.slice(0, -1);
-  if (out.includes("..")) {
+  if (out.length === 0 || out === ".") throw invalidArgument("path must be a non-empty repo-relative path", { value: p });
+  if (out.split("/").includes("..")) {
     throw invalidArgument("path must not contain '..' segments", { value: p });
   }
   return out;
@@ -132,6 +147,7 @@ export function scopesConflict(a: WriteScope, b: WriteScope): boolean {
 
 /** Every overlapping pattern pair, for error reporting. */
 export function conflictingPairs(a: WriteScope, b: WriteScope): Array<[string, string]> {
+  if (isReadOnlyScope(a) || isReadOnlyScope(b)) return [];
   const pairs: Array<[string, string]> = [];
   for (const pa of a.paths) {
     for (const pb of b.paths) {
@@ -143,6 +159,7 @@ export function conflictingPairs(a: WriteScope, b: WriteScope): Array<[string, s
 
 /** Is `path` writable under `scope`? */
 export function scopeAllows(scope: WriteScope, path: string): boolean {
+  if (isReadOnlyScope(scope)) return false;
   return scope.paths.some((p) => matchesGlob(path, p));
 }
 
@@ -152,5 +169,8 @@ export function normalizeScope(scope: WriteScope): WriteScope {
   }
   const seen = new Set<string>();
   for (const p of scope.paths) seen.add(normalizePath(p));
+  if ([...seen].some(isReadOnlyPattern) && ![...seen].every(isReadOnlyPattern)) {
+    throw invalidArgument("the reserved read-only scope cannot be mixed with write paths");
+  }
   return { paths: [...seen].sort(), ...(scope.note ? { note: scope.note } : {}) };
 }

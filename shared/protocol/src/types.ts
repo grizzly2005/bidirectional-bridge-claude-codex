@@ -468,6 +468,7 @@ export const EventType = {
   RESUME_SUCCEEDED: "resume.succeeded",
   RESUME_FAILED: "resume.failed",
   ARTIFACT_PUBLISHED: "artifact.published",
+  MEMORY_UPDATED: "memory.updated",
   STATUS_REPORTED: "status.reported",
   DELIVERABLE_SUBMITTED: "deliverable.submitted",
   VERIFICATION_RECORDED: "verification.recorded",

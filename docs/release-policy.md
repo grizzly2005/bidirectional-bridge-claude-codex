@@ -31,7 +31,7 @@ project does not promise that a database created by one revision will be readabl
 
 ## Versioning
 
-- The package/checkpoint version is `0.3.1` and the workspace root is marked `private`; nothing here is
+- The package/checkpoint candidate version is `0.4.0` and the workspace root is marked `private`; nothing here is
   published to a package registry.
 - While the major version is `0`, a minor bump may carry breaking changes. Treat every version
   change as potentially breaking and read the changelog.
@@ -51,6 +51,14 @@ number, because a `0.x` number does not communicate impact on its own.
 
 ## Release checklist
 
+The release/0.4.0 branch is a versioned candidate. Local certification hashes its public
+material; it does not certify production readiness or change the published v0.3.1 assets.
+The [v0.4.0 notes](releases/v0.4.0.md) document package/runtime0.4.0, wire1.4.0 and SQLite6.
+The web-audit module currently retains its independent 0.1.0 version; packaging verifies
+each workspace against its own lockfile entry and checks internal dependency versions.
+Source and compiled archives include all six workspaces, memory tutorials and client skill
+mirrors. Separate canonical archives are produced for `using-bridge` and `bridge-web-audit`.
+
 A checkpoint is only prepared after these gates pass locally, with real exit codes:
 
 ```bash
@@ -62,6 +70,9 @@ node scripts/certification-manifest.mjs
 npm run skills:check
 npm run links:check
 npm run test:tracking-ui
+node scripts/test-shared-memory.mjs
+node shared/web-audit/examples/cli-smoke.mjs
+python scripts/test-release-package.py
 npm audit --audit-level=low
 ```
 
@@ -73,8 +84,11 @@ Then, before publishing anything:
 3. confirm the changelog entry matches what actually changed;
 4. confirm no claim was added that the committed evidence does not support.
 
-The [CI workflow](../.github/workflows/ci.yml) runs the gates on Linux and Windows. The
-[release workflow](../.github/workflows/release.yml) is dispatched manually for an existing
+The [CI workflow](../.github/workflows/ci.yml) runs the gates on Linux and Windows.
+CI checks the exact PR head and uploads candidate archives on Linux; same-repository
+candidates receive build attestations. Inspect their source identity, hashes and contents
+before integrating. A candidate artifact is not a published release.
+The [release workflow](../.github/workflows/release.yml) is dispatched manually for an existing
 annotated tag, repeats the gates on Linux, builds allowlisted archives and creates a draft.
 Review its conclusion and the downloaded asset hashes before publishing. The release
 workflow never moves a tag or overwrites a published release.

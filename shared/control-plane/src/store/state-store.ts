@@ -25,6 +25,9 @@ import type {
   EventType,
   Lease,
   LeaseId,
+  MemoryLifecycle,
+  MemoryNote,
+  MemoryScope,
   StatusUpdate,
   Task,
   TaskAttempt,
@@ -107,6 +110,29 @@ export interface ExecutionRecord {
   readonly updated_at: number;
 }
 
+/**
+ * Latest revision of each key in exactly one scope as of `before_cursor` (inclusive).
+ * The snapshot is taken first; lifecycle/key filters apply to that latest revision only,
+ * so an archived revision can never resurrect an older active one. Keys are ordered by
+ * binary comparison; `after_key` is exclusive. An explicit empty filter matches nothing.
+ */
+export interface MemoryNoteQuery {
+  readonly scope: MemoryScope;
+  readonly before_cursor: number;
+  readonly after_key?: string;
+  readonly keys?: readonly string[];
+  readonly lifecycles?: readonly MemoryLifecycle[];
+  readonly limit: number;
+}
+
+/** Every immutable revision in exactly one scope with `after < change_cursor <= before_cursor`. */
+export interface MemoryChangeQuery {
+  readonly scope: MemoryScope;
+  readonly after: number;
+  readonly before_cursor: number;
+  readonly limit: number;
+}
+
 export interface AttemptObservation extends ObservationStatus {
   readonly task_id: TaskId;
   readonly attempt: number;
@@ -157,10 +183,11 @@ export interface StateStore {
   // ---- status / deliverables / verification ----
   insertStatus(update: StatusUpdate): void;
   latestStatus(task_id: TaskId): StatusUpdate | undefined;
-  insertDeliverable(deliverable: Deliverable): void;
+  insertDeliverable(deliverable: Deliverable, attempt?: number): void;
   getDeliverable(task_id: TaskId): Deliverable | undefined;
-  insertVerification(task_id: TaskId, result: VerificationResult): void;
-  listVerifications(task_id: TaskId): VerificationResult[];
+  insertVerification(task_id: TaskId, result: VerificationResult, attempt: number): void;
+  /** Undefined returns history; null selects legacy rows whose attempt is unknown. */
+  listVerifications(task_id: TaskId, attempt?: number | null): VerificationResult[];
 
   // ---- event log ----
   appendEvent(event: EventAppend, at: number): BridgeEvent;
@@ -182,6 +209,19 @@ export interface StateStore {
   getObservation(task_id: TaskId, attempt: number): AttemptObservation | undefined;
   putObservation(record: AttemptObservation): void;
   listObservations(task_id?: TaskId): AttemptObservation[];
+
+  // ---- shared memory (immutable revisions; no update or delete) ----
+  /** Latest revision at or before `before_cursor` (inclusive), or the current latest. */
+  getMemoryNote(scope: MemoryScope, key: string, before_cursor?: number): MemoryNote | undefined;
+  /**
+   * Compare-and-swap append. `expected_revision` 0 creates; `note.revision` must equal
+   * `expected_revision + 1`; a different current revision throws REVISION_CONFLICT.
+   * The caller appends the `memory.updated` event in the same outer transaction and
+   * supplies its event id as `note.change_cursor`; storage emits no event itself.
+   */
+  insertMemoryNote(note: MemoryNote, expected_revision: number): void;
+  listMemoryNotes(query: MemoryNoteQuery): MemoryNote[];
+  listMemoryChanges(query: MemoryChangeQuery): MemoryNote[];
 
   close(): void;
 }

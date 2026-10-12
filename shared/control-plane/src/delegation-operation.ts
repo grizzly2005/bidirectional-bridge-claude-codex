@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BridgeError, ErrorCode, EventType, TaskState, type DelegationOutcome, type DelegationRequest } from "@bridge/protocol";
+import { BridgeError, ErrorCode, EventType, TaskState, type DelegationOutcome, type DelegationRequest, type TaskId } from "@bridge/protocol";
 import type { ControlPlane } from "./control-plane.js";
 import type { DelegationOperation } from "./store/state-store.js";
 import { hashRequest } from "./idempotency.js";
@@ -10,19 +10,28 @@ export class DelegationOperations {
   constructor(private readonly cp: ControlPlane) {}
 
   reserve(input: DelegationRequest): { operation: DelegationOperation; owned: boolean } {
+    return this.reserveTask(input);
+  }
+
+  /** Reserve an existing scheduler task without duplicating its identity or contract. */
+  reserveExisting(task_id: TaskId, input: DelegationRequest): { operation: DelegationOperation; owned: boolean } {
+    return this.reserveTask(input, task_id);
+  }
+
+  private reserveTask(input: DelegationRequest, existingTaskId?: TaskId): { operation: DelegationOperation; owned: boolean } {
     if (!Number.isInteger(input.deadline_ms) || input.deadline_ms < 1000 || input.deadline_ms > 86400000
       || !Number.isInteger(input.max_attempts ?? 0) || (input.max_attempts ?? 0) < 0 || (input.max_attempts ?? 0) > 5) {
       throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Invalid delegation deadline or retry budget");
     }
     const request: DelegationRequest = { ...input, max_attempts: input.max_attempts ?? 0,
-      spec: { ...input.spec, preferred_agent: input.to,
+      spec: existingTaskId !== undefined ? input.spec : { ...input.spec, preferred_agent: input.to,
         telemetry_mode: input.spec.telemetry_mode ?? "operational" } };
     const artifacts = this.cp.artifacts.resolveMany(input.input_artifacts)
       .map(a => ({ artifact_id: a.artifact_id, sha256: a.sha256, bytes: a.bytes }));
     const fingerprint = hashRequest({ ...request, idempotency_key: undefined,
       run_id: request.run_id ?? null, parent_task_id: request.parent_task_id ?? null,
       delegation_depth: request.delegation_depth ?? null, total_deadline_ms: request.total_deadline_ms ?? null,
-      artifacts });
+      artifacts, ...(existingTaskId !== undefined ? { existing_task_id: existingTaskId } : {}) });
     const key = input.idempotency_key ?? `unkeyed:${randomUUID()}`;
     return this.cp.store.transaction(() => {
       const existing = this.cp.store.getDelegationOperation(input.from, key);
@@ -56,10 +65,22 @@ export class DelegationOperations {
         return { operation: uncertain, owned: false };
       }
       const started_at = this.cp.clock.now();
-      const task = this.cp.tasks.create({ spec: request.spec, created_by: input.from,
+      const task = existingTaskId !== undefined ? this.cp.tasks.get(existingTaskId) : this.cp.tasks.create({ spec: request.spec, created_by: input.from,
         ...(input.run_id ? { run_id: input.run_id } : {}),
         ...(input.parent_task_id !== undefined ? { parent_task_id: input.parent_task_id } : {}),
         ...(input.delegation_depth !== undefined ? { delegation_depth: input.delegation_depth } : {}) });
+      if (existingTaskId !== undefined) {
+        if (task.state !== TaskState.PENDING || task.owner !== null) {
+          throw new BridgeError(ErrorCode.ILLEGAL_TRANSITION, "Only an unowned PENDING task may enter runReady", { task_id: task.task_id });
+        }
+        if (task.created_by !== input.from || task.run_id !== input.run_id || task.parent_task_id !== input.parent_task_id
+          || task.delegation_depth !== input.delegation_depth || hashRequest(task.spec) !== hashRequest(input.spec)) {
+          throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "runReady contract differs from the existing task", { task_id: task.task_id });
+        }
+        if (!this.cp.tasks.checkDependencies(task.task_id).satisfied) {
+          throw new BridgeError(ErrorCode.DEPENDENCY_UNSATISFIED, "Task dependencies must be DONE before runReady", { task_id: task.task_id });
+        }
+      }
       this.cp.store.appendEvent({ type: EventType.DELEGATION_REQUESTED, task_id: task.task_id, agent: input.from,
         payload: { to: input.to, run_id: task.run_id, parent_task_id: task.parent_task_id,
           delegation_depth: task.delegation_depth, objective: request.spec.objective,

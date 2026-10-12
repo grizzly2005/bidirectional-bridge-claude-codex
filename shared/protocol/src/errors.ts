@@ -24,6 +24,8 @@ export const ErrorCode = {
   DEPENDENCY_CYCLE: "DEPENDENCY_CYCLE",
   /** Same idempotency key replayed with a different payload. */
   IDEMPOTENCY_MISMATCH: "IDEMPOTENCY_MISMATCH",
+  /** Shared memory changed since the supplied expected_revision; reread before merging. */
+  REVISION_CONFLICT: "REVISION_CONFLICT",
   /** Adapter/agent did not respond within its deadline. */
   TIMEOUT: "TIMEOUT",
   /** Stop was requested but no correlated terminal runtime evidence arrived. */

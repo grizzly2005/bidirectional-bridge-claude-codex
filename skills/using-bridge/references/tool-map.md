@@ -51,7 +51,7 @@ Read [tracking-ui.md](tracking-ui.md) for observation-only ChatGPT connections a
 | `bridge_recover` | Expire dead leases and report stranded tasks; it does not retry work. |
 | `bridge_resume_task` | Strictly resume one owned, recoverable task using persisted runtime state. |
 | `bridge_resume_delegated_task` | Let a direct parent owner request strict recovery of its delegated child; the child owner remains the execution identity. |
-| `bridge_cancel_task` | Request durable targeted cancellation as owner or proven direct manager; inspect `runtime_stop_confirmed`, and preserve quarantine when false. |
+| `bridge_cancel_task` | Request durable targeted cancellation as owner or proven direct manager. A flat delegation's creator also has cancellation-only authority when the frozen delegation operation proves it; recovery rights do not change. Inspect `runtime_stop_confirmed` and preserve quarantine when false. |
 | `bridge_continue_task` | Continue the same prelaunch contention-blocked task with a required stable continuation key and its original budget; no runtime handle is needed. |
 | `bridge_repair_observation` | Seal the stored validated observation draft as owner or proven direct manager; no supplied metrics and no model call. |
 | `bridge_read_events` | Page with `next_cursor` as `after` and a stable `task_id`; `has_more` signals another page. `head_event_id` and legacy `last_event_id` are global heads, not pagination cursors. |

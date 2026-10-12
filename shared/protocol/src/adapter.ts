@@ -62,6 +62,8 @@ export interface TaskInvocation {
 
 /** Callbacks the control plane injects so an adapter can report without owning state. */
 export interface InvocationContext {
+  /** Effective registry byte limit, if supplied by the host. Legacy hosts use the default. */
+  readonly max_inline_artifact_bytes?: number;
   /** Push a progress update. Cheap; may be called several times. Never for trivial steps. */
   report(update: Omit<StatusUpdate, "task_id" | "agent" | "at">): Promise<void>;
   /** Register a produced artifact and get back its canonical id. */

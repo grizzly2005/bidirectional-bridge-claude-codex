@@ -9,6 +9,7 @@ import {
   type VerificationResult,
 } from "@bridge/protocol";
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 
 import {
   CODEX_SHELL_ENVIRONMENT_FILTERS,
@@ -393,6 +394,94 @@ describe("CodexAdapter", () => {
       total_tokens: 11,
       turn_count: 2,
     });
+  });
+
+  it.each(["ascii", "unicode", "custom-limit"])("retains oversized %s output with an intact manifest", async (kind) => {
+    const text = kind === "unicode" ? "é😀漢".repeat(12_000) : "x".repeat(70_000);
+    const client = new FakeCodexClient();
+    client.startImpl = async () => ({ thread_id: "chunked_thread", content: resultJson({ artifacts: [
+      { kind: "json", name: "large.json", media_type: "application/json", inline: text, metadata: { original: true } },
+    ] }) });
+    const captured = context();
+    const limit = kind === "custom-limit" ? 16_384 : 65_536;
+    const strictCtx: InvocationContext = { ...captured.ctx, max_inline_artifact_bytes: limit,
+      publishArtifact: async draft => {
+        expect(Buffer.byteLength(draft.inline!, "utf8")).toBeLessThanOrEqual(limit);
+        return captured.ctx.publishArtifact(draft);
+      } };
+    const adapter = new CodexAdapter({ client });
+    const result = await adapter.invoke(invocation(), strictCtx);
+    expect(result.status).toBe("COMPLETE");
+    const manifest = JSON.parse(captured.artifacts.at(-1)!.inline!);
+    expect(manifest.original).toMatchObject({ name: "large.json", kind: "json", media_type: "application/json",
+      bytes: Buffer.byteLength(text, "utf8"), sha256: createHash("sha256").update(text).digest("hex") });
+    const restored = manifest.parts.map((part: { artifact_id: string; sha256: string; bytes: number }, i: number) => {
+      expect(result.artifacts[i]).toBe(part.artifact_id);
+      const inline = captured.artifacts[i]!.inline!;
+      expect(createHash("sha256").update(inline).digest("hex")).toBe(part.sha256);
+      expect(Buffer.byteLength(inline)).toBe(part.bytes);
+      return inline;
+    }).join("");
+    expect(restored).toBe(text);
+    expect(captured.artifacts.slice(0, -1).every(a => a.media_type === "text/plain; charset=utf-8")).toBe(true);
+  });
+
+  it("preserves an honest partial result when fragment publication fails", async () => {
+    const client = new FakeCodexClient();
+    client.startImpl = async () => ({ thread_id: "fragment_partial", content: resultJson({ changed_scope: ["codex/output.txt"],
+      artifacts: [{ kind: "report", name: "large", media_type: "text/plain", inline: "x".repeat(99_000) }] }) });
+    const captured = context(); let calls = 0;
+    const adapter = new CodexAdapter({ client });
+    const result = await adapter.invoke(invocation(), { ...captured.ctx, max_inline_artifact_bytes: 40_000,
+      publishArtifact: async draft => { if (++calls === 2) throw new Error("fixture storage rejected fragment 2");
+        return captured.ctx.publishArtifact(draft); } });
+    expect(result.status).toBe("PARTIAL");
+    expect(result.changed_scope).toEqual(["codex/output.txt"]);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.verification_results).toHaveLength(1);
+    expect(result.remaining_risks[0]).toContain("missing part/manifest 2");
+    expect(captured.artifacts.some(a => a.name.endsWith("manifest.json"))).toBe(false);
+  });
+
+  it("uses a read-only sandbox for a reserved no-write task and its continuation", async () => {
+    const client = new FakeCodexClient();
+    client.startImpl = async () => ({ thread_id: "read_only", content: "invalid-json" });
+    const adapter = new CodexAdapter({ client, sandbox: "workspace-write" });
+    const base = invocation();
+    expect((await adapter.invoke({ ...base, spec: { ...base.spec, scope: { paths: ["(no-write)/review/**"] } } }, context().ctx)).status).toBe("COMPLETE");
+    expect(client.starts[0]!.sandbox).toBe("read-only");
+    expect(client.replies[0]!.sandbox).toBe("read-only");
+  });
+
+  it.each(["negative", "generic", "abort"])("does not inherit stop proof during a repair that ends with %s", async mode => {
+    const client = new FakeCodexClient();
+    Object.defineProperty(client, "supportsStopConfirmation", { value: true });
+    client.startImpl = async () => ({ thread_id: "repair_pending", content: "not-json" });
+    const cancel = new AbortController();
+    client.replyImpl = async () => {
+      if (mode === "abort") cancel.abort();
+      if (mode === "negative") throw new BridgeError(ErrorCode.TIMEOUT, "active reply timed out", { runtime_stop_confirmed: false });
+      throw new Error("repair failed before a stop confirmation");
+    };
+    const captured = context(cancel.signal);
+    const states: string[] = [];
+    const adapter = new CodexAdapter({ client, max_structure_repairs: 1 });
+    await expect(adapter.invoke(invocation(), { ...captured.ctx,
+      reportRuntimeState: async state => { states.push(state); } })).rejects.toMatchObject({
+      code: ErrorCode.RUNTIME_STOP_UNCONFIRMED, details: { runtime_stop_confirmed: false },
+    });
+    expect(states).toEqual(["stopped", "running", "unconfirmed"]);
+  });
+
+  it("records a stopped repair after a successful reply from an injected client", async () => {
+    const client = new FakeCodexClient();
+    Object.defineProperty(client, "supportsStopConfirmation", { value: true });
+    client.startImpl = async () => ({ thread_id: "repair_done", content: "not-json" });
+    const captured = context(); const states: string[] = [];
+    const adapter = new CodexAdapter({ client });
+    expect((await adapter.invoke(invocation(), { ...captured.ctx,
+      reportRuntimeState: async state => { states.push(state); } })).status).toBe("COMPLETE");
+    expect(states).toEqual(["stopped", "running", "stopped"]);
   });
 
   it("fails closed after an invalid out-of-scope result and one repair", async () => {

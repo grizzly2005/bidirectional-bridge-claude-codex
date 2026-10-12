@@ -45,6 +45,8 @@ export interface CodexStartRequest {
 }
 
 export interface CodexReplyRequest {
+  /** Read-only task continuations may explicitly preserve their sandbox per turn. */
+  readonly sandbox?: CodexSandbox;
   readonly thread_id: string;
   readonly cwd?: string;
   readonly prompt: string;

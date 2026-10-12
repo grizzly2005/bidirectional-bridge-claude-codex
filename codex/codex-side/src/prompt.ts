@@ -1,12 +1,14 @@
 import {
   ArtifactKind,
   DeliverableStatus,
-  VerificationKind,
+  validateVerificationResult,
   VerificationResultSchema,
   assertValid,
   invalidArgument,
   normalizePath,
   scopeAllows,
+  artifactInputRecords,
+  MAX_INLINE_INPUT_CHARS,
   type ArtifactKind as ArtifactKindType,
   type DeliverableStatus as DeliverableStatusType,
   type JsonSchema,
@@ -34,8 +36,6 @@ export interface CodexTaskResult {
   readonly recommended_next_action: string;
   readonly blocker?: string;
 }
-
-const MAX_INLINE_INPUT_CHARS = 100_000;
 
 const ArtifactDraftSchema: JsonSchema = {
   type: "object",
@@ -132,27 +132,7 @@ export const CODEX_DEVELOPER_INSTRUCTIONS = [
 
 /** Build a bounded prompt containing task and artifact records, never prior chat history. */
 export function buildTaskPrompt(invocation: TaskInvocation): string {
-  let inlineChars = 0;
-  const inputs = invocation.inputs.map((artifact) => {
-    inlineChars += artifact.inline?.length ?? 0;
-    return {
-      artifact_id: artifact.artifact_id,
-      kind: artifact.kind,
-      name: artifact.name,
-      media_type: artifact.media_type,
-      ...(artifact.path !== undefined ? { path: artifact.path } : {}),
-      ...(artifact.inline !== undefined ? { inline: artifact.inline } : {}),
-      sha256: artifact.sha256,
-      bytes: artifact.bytes,
-      ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
-    };
-  });
-  if (inlineChars > MAX_INLINE_INPUT_CHARS) {
-    throw invalidArgument("inline input artifacts exceed the Codex prompt limit", {
-      inline_chars: inlineChars,
-      maximum: MAX_INLINE_INPUT_CHARS,
-    });
-  }
+  const inputs = artifactInputRecords(invocation.inputs, "Codex");
 
   const envelope = {
     task_id: invocation.task_id,
@@ -227,20 +207,7 @@ function normalizeRepoRelativePath(value: string, label: string): string {
 }
 
 function validateVerification(result: VerificationResult): VerificationResult {
-  if (result.exit_code !== null && result.passed !== (result.exit_code === 0)) {
-    throw invalidArgument("verification passed flag contradicts exit_code", {
-      command: result.command,
-      passed: result.passed,
-      exit_code: result.exit_code,
-    });
-  }
-  if (result.kind !== VerificationKind.MANUAL && result.exit_code === null) {
-    throw invalidArgument("command-based verification requires an exit_code", {
-      command: result.command,
-      kind: result.kind,
-    });
-  }
-  return result;
+  return validateVerificationResult(result);
 }
 
 /** Parse, schema-check, and enforce write-scope safety on a Codex final response. */

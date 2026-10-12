@@ -1,5 +1,5 @@
 import {
-  TASK_STATES, cleanLabel, normalizeSnapshot, mergeSnapshot, chooseSelection, getFreshness,
+  TASK_STATES, cleanLabel, normalizeSnapshot, mergeSnapshot, chooseSelection, getFreshness, resolveFollowMode,
   shouldAnimate, describeTask, attemptLabel, knownMetric, graphLayout, normalizeHistory, mergeHistory,
 } from "./tracking-state.mjs";
 import { createTrackingPoller } from "./tracking-poller.mjs";
@@ -74,7 +74,7 @@ export function mountTrackingUI({ root, transport }) {
   let hostVisible = true;
   let viewportVisible = true;
   let graphMode = true;
-  let autoFollow = true;
+  let autoFollow = resolveFollowMode(snapshot, true);
   let destroyed = false;
   let closed = false;
   let closing = false;
@@ -406,8 +406,10 @@ export function mountTrackingUI({ root, transport }) {
     queueDraw();
   }
 
-  function applySnapshot(incoming, allowRunChange = autoFollow) {
-    snapshot = mergeSnapshot(snapshot, incoming, { allowRunChange, allowEventReset });
+  function applySnapshot(incoming, allowRunChange) {
+    // The mode the server just declared decides both the control and whether a run change is accepted.
+    autoFollow = resolveFollowMode(incoming, autoFollow);
+    snapshot = mergeSnapshot(snapshot, incoming, { allowRunChange: allowRunChange ?? autoFollow, allowEventReset });
     allowEventReset = false;
     workspace.textContent = snapshot.workspace_label;
     renderTasks();
@@ -490,7 +492,8 @@ export function mountTrackingUI({ root, transport }) {
     try {
       const next = normalizeSnapshot(await transport.bind({ view_id: viewId, run_id: runId }));
       if (destroyed || closed || generation !== bindingGeneration) return;
-      autoFollow = runId === null;
+      // The request itself is only a fallback for a response that does not expose the mode.
+      autoFollow = resolveFollowMode(next, runId === null);
       applySnapshot(next, true);
       connected = true;
       poller.reset(next);

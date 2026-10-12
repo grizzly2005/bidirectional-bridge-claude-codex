@@ -48,18 +48,26 @@ if (has("--fixture-descendant")) {
   await new Promise(() => {});
 }
 
-// Record the invocation so the test can assert the argv contract.
-if (env.FAKE_CLAUDE_ARGV_FILE) {
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(
-    env.FAKE_CLAUDE_ARGV_FILE,
-    JSON.stringify({ args, cwd: process.cwd(), stdinIsTTY: process.stdin.isTTY ?? false }, null, 2),
-  );
-}
-
 if (has("--version")) {
   stdout.write("2.1.222 (Claude Code)\n");
   process.exit(0);
+}
+
+if (env.FAKE_CLAUDE_MODE === "reject-input") {
+  process.stdin.destroy();
+  process.stderr.write("fixture exits before accepting stdin\n");
+  process.exit(2);
+}
+if (env.FAKE_CLAUDE_MODE === "slow-input") await new Promise(resolve => setTimeout(resolve, 10_000));
+
+// Model stand-in: read the finite prompt through the real OS pipe, including explicit EOF.
+let stdin = "";
+process.stdin.setEncoding("utf8");
+for await (const chunk of process.stdin) stdin += chunk;
+if (env.FAKE_CLAUDE_ARGV_FILE) {
+  writeFileSync(env.FAKE_CLAUDE_ARGV_FILE,
+    JSON.stringify({ args, cwd: process.cwd(), stdin, stdinEof: true,
+      stdinIsTTY: process.stdin.isTTY ?? false }, null, 2));
 }
 
 const mode = env.FAKE_CLAUDE_MODE ?? "ok";
@@ -134,7 +142,9 @@ if (mode === "tree" || mode === "orphan") {
     summary: "v22",
   };
   const verificationResults =
-    mode === "mixed"
+    mode === "contradictory"
+      ? [{ ...passingVerification, passed: true, exit_code: 1 }]
+      : mode === "mixed"
       ? [
           passingVerification,
           { kind: "test", command: "npm test", passed: false, exit_code: 1, summary: "1 failed" },
@@ -180,6 +190,14 @@ if (mode === "tree" || mode === "orphan") {
           "```",
         ].join("\n");
 
+  if (mode.startsWith("checkpoint")) {
+    emit({ type: "assistant", message: { role: "assistant", model: reportedModel,
+      content: [{ type: "text", text: "ordinary assistant prose must not be archived" }] } });
+    const checkpoint = { schema_version: 1, summary: "bounded review progress", verification_results: [passingVerification], remaining_risks: ["final review pending"] };
+    if (mode === "checkpoint-secret") checkpoint.summary = "Bearer " + "A".repeat(24);
+    emit({ type: "assistant", message: { role: "assistant", model: reportedModel,
+      content: [{ type: "text", text: JSON.stringify({ bridge_checkpoint: checkpoint }) }] } });
+  }
   emit({
     type: "assistant",
     message: {
@@ -204,7 +222,7 @@ if (mode === "tree" || mode === "orphan") {
       result: contract,
       type: "result",
     });
-  } else if (mode === "maxturns") {
+  } else if (mode === "maxturns" || mode.startsWith("checkpoint")) {
     emit({
       is_error: false,
       duration_api_ms: 2412,

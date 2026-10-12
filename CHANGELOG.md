@@ -13,6 +13,58 @@ explicitly.
 
 No changes recorded yet.
 
+## 0.4.0 — 2026-10-12 (candidate)
+
+### Added
+
+- Experimental web-audit workspace, JSON campaign format, CLI and skill: actor/object/state
+  mapping, hypothesis planning, bounded GET replay, differential verification, refutation
+  packets and abstract pattern exchange.
+- Shared working memory through `memory_get_context`, `memory_upsert` and
+  `memory_get_changes`: exact development/program scopes, optimistic revisions, lifecycle,
+  immutable history, artifact references and bounded on-demand context.
+
+### Changed
+
+- **Breaking persisted-state change:** experimental databases migrate to schema 6.
+  Keep them separate from schema-4/5 release databases; older binaries cannot reopen them.
+  Campaign JSON remains single-writer and retains the canonical investigation evidence.
+- Include the experimental workspaces, tests, documentation and both skills in public-material
+  certification; include web-audit distributions in compiled packaging.
+
+### Fixed
+
+- Preserve resolved Claude inputs and Windows stdin transport, existing task identity in
+  `runReady`, attempt-scoped verification, rejected completion evidence and byte-bounded
+  Codex artifact fragments. Keep read-only task authority and fresh runtime-stop evidence
+  during structure repair. See the [experimental change table](docs/web-audit-experimental.md#bridge-changes-on-this-branch).
+- Report a scheduler fixture's premature process exit at its readiness barrier instead of
+  hiding the startup error behind a test timeout; retain the two-process execution assertions.
+- Validate simulated Windows launcher paths with Windows path rules in the cross-platform
+  tracking test, including when the suite runs on Linux.
+- Reread final task state after an execution stops during cross-process cancellation polling;
+  a worker committing between the two reads no longer returns a stale WORKING/false result.
+- Allow cold Windows process inspection to use the remaining declared stop deadline instead
+  of a shorter per-command limit; timed-out inspection still cannot certify worker termination.
+
+### Documentation
+
+- Present Development Coordination and Security Research & Web Audit Assistance separately,
+  with a Codex → Claude → Codex memory example and two restart tutorials.
+- Document clean experimental installation, schema-6 migration/rollback and the manager's
+  artifact-mediated memory handoff for delegated Codex workers.
+- Align the wire marker/documentation at1.4.0 and distinguish it from package0.4.0,
+  web-audit0.1.0 and SQLite6. Add release notes and candidate archive/provenance validation.
+
+### Security
+
+- Extract Claude scope directories with string scans instead of polynomial glob-stripping
+  expressions; preserve directory grants and bound long wildcard input.
+- Raise the MCP SDK floor to 1.31.0 and refresh the locked transitive proxy-addr dependency
+  to 2.0.8 for [GHSA-6qxp-vccf-f47h](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-6qxp-vccf-f47h)
+  and [GHSA-jqcg-44mw-7w3h](https://github.com/jshttp/proxy-addr/security/advisories/GHSA-jqcg-44mw-7w3h).
+  The SDK advisory concerns OAuth HTTP clients, not the bridge's native stdio workflow.
+
 ## 0.3.1 — 2026-10-03
 
 ### Fixed

@@ -16,6 +16,8 @@ import {
   EventType,
   TaskState,
   assertValid,
+  validateVerificationResult,
+  isReadOnlyScope,
   type AgentId,
   type Deliverable,
   type TaskId,
@@ -26,6 +28,8 @@ import type { StateStore } from "./store/state-store.js";
 import type { TaskService } from "./task-service.js";
 
 export interface SubmitOptions {
+  /** Runtime commits provide their fenced attempt; manual/native submissions use current. */
+  readonly attempt?: number;
   /**
    * Allow COMPLETE without passing verification evidence. Off by default and intended
    * only for tasks whose deliverable genuinely cannot be checked by a command
@@ -33,6 +37,13 @@ export interface SubmitOptions {
    */
   readonly allowUnverified?: boolean;
   readonly waiver_reason?: string;
+}
+
+/** Only this refusal permits the orchestrator to preserve COMPLETE as honest PARTIAL. */
+export class VerificationRejectedError extends BridgeError {
+  constructor(message: string, details: Record<string, unknown>) {
+    super(ErrorCode.INVALID_ARGUMENT, message, details);
+  }
 }
 
 export class DeliverableService {
@@ -43,7 +54,8 @@ export class DeliverableService {
   ) {}
 
   /** Record evidence that a check ran. Callers must pass a real exit code. */
-  recordVerification(task_id: TaskId, agent: AgentId, result: VerificationResult): void {
+  recordVerification(task_id: TaskId, agent: AgentId, result: VerificationResult, attempt?: number): void {
+    validateVerificationResult(result);
     this.store.transaction(() => {
       const task = this.tasks.get(task_id);
       if (task.owner !== agent) {
@@ -53,13 +65,17 @@ export class DeliverableService {
           { task_id, owner: task.owner },
         );
       }
-      this.store.insertVerification(task_id, result);
+      if (attempt !== undefined && attempt !== task.attempt) {
+        throw new BridgeError(ErrorCode.ILLEGAL_TRANSITION, "Verification belongs to an obsolete task attempt", { task_id, attempt });
+      }
+      this.store.insertVerification(task_id, result, task.attempt);
       this.store.appendEvent(
         {
           type: EventType.VERIFICATION_RECORDED,
           task_id,
           agent,
           payload: {
+            attempt: task.attempt,
             kind: result.kind,
             command: result.command,
             passed: result.passed,
@@ -72,8 +88,8 @@ export class DeliverableService {
     });
   }
 
-  listVerifications(task_id: TaskId): VerificationResult[] {
-    return this.store.listVerifications(task_id);
+  listVerifications(task_id: TaskId, attempt?: number | null): VerificationResult[] {
+    return this.store.listVerifications(task_id, attempt);
   }
 
   /**
@@ -94,10 +110,21 @@ export class DeliverableService {
           { task_id: deliverable.task_id, owner: task.owner },
         );
       }
+      if (options.attempt !== undefined && options.attempt !== task.attempt) {
+        throw new BridgeError(ErrorCode.ILLEGAL_TRANSITION, "Deliverable belongs to an obsolete task attempt", {
+          task_id: task.task_id, attempt: options.attempt,
+        });
+      }
+      if (isReadOnlyScope(task.spec.scope) && deliverable.changed_scope.length > 0) {
+        throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "read-only tasks must report changed_scope: []", {
+          task_id: task.task_id,
+        });
+      }
 
-      // Merge any evidence recorded during the run with what the deliverable carries.
-      const recorded = this.store.listVerifications(deliverable.task_id);
+      // Historical/unknown-freshness checks stay readable, but cannot judge this attempt.
+      const recorded = this.store.listVerifications(deliverable.task_id, task.attempt);
       const evidence = mergeEvidence(recorded, deliverable.verification_results);
+      evidence.forEach(validateVerificationResult);
 
       if (deliverable.status === DeliverableStatus.COMPLETE) {
         // Order matters: report a *failing* check before an absent one. Both conditions
@@ -106,20 +133,19 @@ export class DeliverableService {
         // wrong problem.
         const failing = evidence.filter((v) => !v.passed);
         if (failing.length > 0) {
-          throw new BridgeError(
-            ErrorCode.INVALID_ARGUMENT,
+          throw new VerificationRejectedError(
             `cannot submit COMPLETE while ${failing.length} verification(s) are failing: ` +
               failing.map((f) => `${f.kind}(${f.command})`).join(", "),
-            { task_id: deliverable.task_id, failing: failing.map((f) => f.command) },
+            { task_id: deliverable.task_id, attempt: task.attempt, failing: failing.map((f) => f.command) },
           );
         }
         if (evidence.length === 0 && !options.allowUnverified) {
-          throw new BridgeError(
-            ErrorCode.INVALID_ARGUMENT,
+          throw new VerificationRejectedError(
             `cannot submit COMPLETE for ${deliverable.task_id} with no passing verification. ` +
               `Run a real check, or submit PARTIAL, or pass allowUnverified with a waiver_reason.`,
             {
               task_id: deliverable.task_id,
+              attempt: task.attempt,
               verification_criteria: task.spec.verification_criteria,
               evidence_count: evidence.length,
             },
@@ -129,13 +155,14 @@ export class DeliverableService {
 
       const now = this.clock.now();
       const finalDeliverable: Deliverable = { ...deliverable, verification_results: evidence };
-      this.store.insertDeliverable(finalDeliverable);
+      this.store.insertDeliverable(finalDeliverable, task.attempt);
       this.store.appendEvent(
         {
           type: EventType.DELIVERABLE_SUBMITTED,
           task_id: deliverable.task_id,
           agent: deliverable.agent,
           payload: {
+            attempt: task.attempt,
             status: deliverable.status,
             summary: deliverable.summary,
             artifacts: deliverable.artifacts,

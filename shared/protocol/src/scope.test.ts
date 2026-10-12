@@ -5,16 +5,27 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { conflictingPairs, globsOverlap, matchesGlob, normalizePath, normalizeScope, scopeAllows, scopesConflict } from "./scope.js";
+import { conflictingPairs, globsOverlap, isReadOnlyScope, matchesGlob, normalizePath, normalizeScope, scopeAllows, scopesConflict } from "./scope.js";
 
 describe("normalizePath", () => {
   it("canonicalises separators, prefixes and trailing slashes", () => {
     expect(normalizePath("./a\\b/c/")).toBe("a/b/c");
-    expect(normalizePath("/a//b")).toBe("a/b");
+    expect(normalizePath("a//b")).toBe("a/b");
   });
 
   it("rejects traversal, which could otherwise escape a leased scope", () => {
     expect(() => normalizePath("a/../../etc/passwd")).toThrow(/\.\./);
+    for (const path of ["..", "../x", "a/..", "a\\..\\x"]) expect(() => normalizePath(path)).toThrow(/\.\./);
+  });
+
+  it("accepts two dots in file names and directory names", () => {
+    expect(normalizePath("assets/version..bundle.js")).toBe("assets/version..bundle.js");
+    expect(matchesGlob("assets/version..bundle.js", "assets/**")).toBe(true);
+    expect(normalizePath("directory..name/file...js")).toBe("directory..name/file...js");
+  });
+
+  it.each(["/a//b", "\\rooted", "\\\\server\\share", "C:/x", "C:x", "./C:/x", "x\u0000y", "./", "."])("rejects non-relative or empty normal forms: %j", path => {
+    expect(() => normalizePath(path)).toThrow();
   });
 
   it("rejects empty input", () => {
@@ -115,5 +126,19 @@ describe("normalizeScope", () => {
 
   it("requires at least one path", () => {
     expect(() => normalizeScope({ paths: [] })).toThrow(/at least one path/);
+  });
+
+  it("gives the reserved read-only namespace no writer conflicts or writable paths", () => {
+    for (const path of ["(no-write)/**", "(no-write)/child-unique/**"]) {
+      const scope = normalizeScope({ paths: [path] });
+      expect(isReadOnlyScope(scope)).toBe(true);
+      expect(scopesConflict(scope, { paths: ["**"] })).toBe(false);
+      expect(scopesConflict(scope, scope)).toBe(false);
+      expect(scopeAllows(scope, "(no-write)/child-unique/fake-file")).toBe(false);
+      expect(scopeAllows(scope, "src/real-file.ts")).toBe(false);
+    }
+    expect(isReadOnlyScope({ paths: ["(no-write-other)/**"] })).toBe(false);
+    expect(() => normalizeScope({ paths: ["(no-write)/**", "src/**"] })).toThrow(/mixed/);
+    expect(() => normalizeScope({ paths: ["(no-write)/child-unique/**", "src/**"] })).toThrow(/mixed/);
   });
 });

@@ -76,7 +76,28 @@ Swap `to` for the opposite runtime. Preserve the actual root run, parent, and de
 - A path artifact must exist, be repo-relative, and fit the leased output scope. Use inline evidence for read-only facts.
 - Each artifact uses exactly one of `path` or `inline`.
 - Preserve exact exit codes and commands. Never convert free-text claims into verification evidence.
+- `passed` must agree with a known process exit code; command checks require a code. Only
+  explicit manual checks may use `null`. Wrap negative tests in an assertion that exits zero.
 - Use `commit_or_diff: null` when neither exists.
+
+## Intermediate Claude checkpoints
+
+For work with several milestones, ask the worker to send up to four separate fenced JSON
+messages in this shape before its final deliverable:
+
+```json
+{"bridge_checkpoint":{"schema_version":1,"summary":"Bounded findings and progress.","verification_results":[],"remaining_risks":["Final review pending."]}}
+```
+
+The runner publishes only this explicit projection, never arbitrary assistant messages.
+Keep the summary within 2000 characters, at most eight checks and eight risks. A check uses
+`kind`, the exact `command`, `passed`, `exit_code` and `summary`; output logs and additional
+fields are refused. Do not include credentials, runtime handles, prompts or transcripts.
+Secret and handle checks are guardrails, not exhaustive data-loss prevention.
+
+The final deliverable remains required. On a turn limit or interruption, a saved checkpoint
+stays `PARTIAL` and carries its evidence and artifact references. If an intermediate command
+failed, rerun that same check after fixing it so the final evidence can supersede its failure.
 
 ## Replay and observations
 

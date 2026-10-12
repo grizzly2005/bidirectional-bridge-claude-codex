@@ -113,7 +113,8 @@ export class TrackingCoordinator {
       db.prepare(`INSERT INTO tracking_views(view_id,principal,context_key,run_id,follow_current,closed,expires_at,latest_seen_run)
         VALUES(?,?,?,?,?,0,?,?) ON CONFLICT(view_id) DO UPDATE SET run_id=excluded.run_id,
         follow_current=excluded.follow_current,closed=0,expires_at=excluded.expires_at,latest_seen_run=excluded.latest_seen_run`)
-        .run(viewId, this.principal, context, runId, args.follow_current ?? !args.run_id ? 1 : 0, this.now() + TTL, latestRun);
+        // An explicit run pins the view unless the caller asked to keep following the current session.
+        .run(viewId, this.principal, context, runId, (args.follow_current ?? !args.run_id) ? 1 : 0, this.now() + TTL, latestRun);
       db.prepare("INSERT INTO tracking_preferences VALUES(?,1) ON CONFLICT(principal) DO UPDATE SET enabled=1").run(this.principal);
       db.exec("COMMIT");
     } catch (err) { db.exec("ROLLBACK"); throw err; }
@@ -155,7 +156,9 @@ export class TrackingCoordinator {
     const snapshot = this.reader.snapshot(view.run_id, cursor ? { database: cursor["database"] as string, event: cursor["event"] as number } : undefined);
     const { database, cursor_event, ...projection } = snapshot;
     return { schema_version: 1, workspace_ref: this.workspaceRef, workspace_label: this.workspaceLabel, view_id: view.view_id,
-      run_id: view.run_id, ...projection, next_cursor: this.sign({ type: "events", view: view.view_id, run: view.run_id, database, event: cursor_event }),
+      // The reader must be able to tell a pinned view from one that follows the current session.
+      run_id: view.run_id, follow_current: view.follow_current === 1, ...projection,
+      next_cursor: this.sign({ type: "events", view: view.view_id, run: view.run_id, database, event: cursor_event }),
       observed_at: this.now(), stale_after_ms: snapshot.tasks.some(task => ["QUEUED", "RUNNING"].includes(task.execution_phase ?? "") || ["PENDING", "CLAIMED", "WORKING", "VERIFYING"].includes(task.state)) ? 6000 : 30_000 };
   }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const omitUsage = process.argv.includes("--omit-usage");
 const multiUsage = process.argv.includes("--multi-usage");
@@ -30,9 +31,13 @@ const resultText = () =>
     recommended_next_action: "none",
   });
 
-createInterface({ input: process.stdin }).on("line", (line) => {
+createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
+  const record = process.argv.find(arg => arg.startsWith("--record="))?.slice("--record=".length);
+  if (record && ["thread/start", "thread/resume", "turn/start"].includes(message.method)) {
+    appendFileSync(record, `${JSON.stringify({ method: message.method, params: message.params })}\n`);
+  }
   if (message.id === undefined) return;
 
   if (message.method === "initialize") {
@@ -90,6 +95,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: message.id,
       result: { turn: { id: turnId, items: [], status: "inProgress" } },
     });
+    const badFrame = process.argv.find(arg => arg.startsWith("--bad-frame="))?.slice("--bad-frame=".length);
+    if (badFrame) {
+      send(badFrame === "null" ? null : badFrame === "array" ? []
+        : { method: "turn/completed", params: { threadId, turn: { id: turnId }, private: "SENSITIVE_FRAME_MARKER" } });
+      return;
+    }
+    if (process.argv.includes("--delayed-turn")) await new Promise(resolve => setTimeout(resolve, 180));
     if (failedWithoutUsage) {
       send({
         jsonrpc: "2.0",

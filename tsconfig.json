@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "shared/protocol" },
+    { "path": "shared/web-audit" },
     { "path": "shared/control-plane" },
     { "path": "shared/mcp-server-core" },
     { "path": "claude/claude-side" },

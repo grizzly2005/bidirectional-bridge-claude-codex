@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, existsSync, rmSync, symlinkSync, mkdirSync } from "node:fs";
+import { mkdtempSync, existsSync, lstatSync, rmSync, symlinkSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 import { createRequire } from "node:module";
 import { request as httpRequest } from "node:http";
 import type { DatabaseSync as DatabaseCtor } from "node:sqlite";
 import { ControlPlane, ManualClock } from "@bridge/control-plane";
-import { seededRandom, type TaskSpec } from "@bridge/protocol";
+import { seededRandom, type Deliverable, type TaskSpec, type VerificationResult } from "@bridge/protocol";
 import { TrackingCoordinator } from "./tracking.js";
 import { TrackingReader, TRACKING_EVENT_LIMIT } from "./tracking-reader.js";
 import { TrackingMcpServer } from "./tracking-server.js";
-import { TrackingHttpServer } from "./tracking-http.js";
+import { TrackingHttpServer, openTrackingBrowser, resolveTrackingLauncher } from "./tracking-http.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -33,6 +33,51 @@ function fixture() {
   const root = () => { clock.advance(1); return cp.tasks.create({ spec, created_by: "codex" }); };
   return { workspace, cp, tracking, clock, databasePath, root };
 }
+
+describe("tracking verification totals", () => {
+  const success: VerificationResult = { kind: "test", command: "PRIVATE_FINAL_COMMAND", passed: true, exit_code: 0,
+    summary: "PRIVATE_FINAL_SUMMARY", output_excerpt: "PRIVATE_FINAL_OUTPUT" };
+  function working(f: ReturnType<typeof fixture>) {
+    const task = f.root(); f.cp.tasks.claim(task.task_id, "codex");
+    f.cp.tasks.transition({ task_id: task.task_id, agent: "codex", to: "WORKING" }); return task;
+  }
+  function submit(f: ReturnType<typeof fixture>, taskId: string, results: VerificationResult[], status: Deliverable["status"] = "COMPLETE") {
+    f.cp.deliverables.submit({ task_id: taskId, agent: "codex", status, summary: "PRIVATE_FINAL_SUMMARY", changed_scope: [], artifacts: [],
+      commit_or_diff: null, verification_performed: [], verification_results: results, remaining_risks: [], dependencies_unblocked: [],
+      recommended_next_action: "none", at: f.clock.now() });
+  }
+  it("counts final-only evidence without exposing its private content or mutating the store", () => {
+    const f = fixture(); const task = working(f);
+    submit(f, task.task_id, [success, { ...success, kind: "manual", command: "PRIVATE_MANUAL_COMMAND", exit_code: null }]);
+    expect(f.cp.deliverables.listVerifications(task.task_id)).toEqual([]);
+    const head = f.cp.lastEventId(); const snapshot = f.tracking.reader.snapshot(task.run_id);
+    expect(snapshot.tasks[0]?.verification).toEqual({ passed: 2, failed: 0 });
+    expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_"); expect(f.cp.lastEventId()).toBe(head);
+  });
+  it("uses the final result that supersedes a recorded failure without counting both", () => {
+    const f = fixture(); const task = working(f);
+    f.cp.deliverables.recordVerification(task.task_id, "codex", { ...success, passed: false, exit_code: 1 });
+    expect(f.tracking.reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 0, failed: 1 });
+    submit(f, task.task_id, [success]);
+    expect(f.tracking.reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 1, failed: 0 });
+  });
+  it("counts a partial deliverable failure and deduplicates evidence recorded before submission", () => {
+    const f = fixture(); const task = working(f);
+    f.cp.deliverables.recordVerification(task.task_id, "codex", success);
+    submit(f, task.task_id, [success, { ...success, command: "PRIVATE_FAILED_COMMAND", passed: false, exit_code: 1 }], "PARTIAL");
+    expect(f.tracking.reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 1, failed: 1 });
+  });
+  it("falls back for corrupt final JSON and ignores non-object or non-boolean evidence", () => {
+    const f = fixture(); const task = working(f); f.cp.deliverables.recordVerification(task.task_id, "codex", success);
+    const db = new DatabaseSync(f.databasePath); cleanups.push(() => db.close());
+    db.prepare("INSERT INTO deliverables(task_id,agent,status,at,json,attempt) VALUES(?,'codex','PARTIAL',1000,?,0)").run(task.task_id, "{broken");
+    expect(f.tracking.reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 1, failed: 0 });
+    db.prepare("UPDATE deliverables SET json=? WHERE task_id=?").run(JSON.stringify({ verification_results: [null, "PRIVATE_CORRUPT_VALUE", 3,
+      { passed: true }, { passed: false }, { passed: 1 }] }), task.task_id);
+    const snapshot = f.tracking.reader.snapshot(task.run_id);
+    expect(snapshot.tasks[0]?.verification).toEqual({ passed: 1, failed: 1 }); expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_");
+  });
+});
 
 describe("read-only tracking and authority", () => {
   it("starts the linked observer CLI and MCP server through an npm-style junction", async () => {
@@ -139,7 +184,7 @@ describe("read-only tracking and authority", () => {
     db.prepare("UPDATE tasks SET attempt=1,owner='claude' WHERE task_id=?").run(child.task_id);
     db.prepare("INSERT INTO task_executions VALUES(?,?,?,?)").run(child.task_id, "claude", "QUARANTINED", JSON.stringify({ generation: "PRIVATE_GENERATION", executor_pid: 9999, runtime_stop_confirmed: false, cancel_requested_at: 1001 }));
     db.prepare("INSERT INTO attempt_telemetry VALUES(?,?,?,?,?)").run(child.task_id, 0, root.run_id, "claude", JSON.stringify({ input_tokens: 0, output_tokens: null, attempt_wall_duration_ms: 5, runtime_failure: { category: "auth", source: "PRIVATE_OAUTH_SESSION" }, PRIVATE_PROMPT: "secret" }));
-    db.prepare("INSERT INTO deliverables VALUES(?,?,?,?,?)").run(child.task_id, "claude", "COMPLETE", 1001, '{"summary":"PRIVATE_PROMPT"}');
+    db.prepare("INSERT INTO deliverables(task_id,agent,status,at,json,attempt) VALUES(?,?,?,?,?,1)").run(child.task_id, "claude", "COMPLETE", 1001, '{"summary":"PRIVATE_PROMPT"}');
     const before = db.prepare("SELECT * FROM events ORDER BY event_id").all();
     const snapshot = f.tracking.open({ run_id: root.run_id });
     expect(JSON.stringify(snapshot)).not.toMatch(/PRIVATE_|sk-secret|C:\\\\private|execution_handle|generation|executor_pid|scope|spec_json/u);
@@ -305,5 +350,103 @@ describe("MCP Apps registration and loopback fallback", () => {
     expect((await request({}, body, `/api?token=${token}`)).status).toBe(404);
     expect((await request({}, { ...body, arguments: { ...body.arguments, workspace: "../foreign" } })).status).toBe(400);
     expect((await fetch(url.origin)).headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("the view reports whether it follows the current session", () => {
+  it("pins an explicit run, restores the current session and then follows the next root", () => {
+    const f = fixture(); const first = f.root();
+    const pinned = f.tracking.open({ run_id: first.run_id });
+    expect(pinned).toMatchObject({ run_id: first.run_id, follow_current: false });
+    const second = f.root(); f.tracking.followRun(second.run_id);
+    expect(f.tracking.read({ view_id: pinned.view_id })).toMatchObject({ run_id: first.run_id, follow_current: false });
+    // Coming back to the current session must also pick up a root created afterwards.
+    expect(f.tracking.bind({ view_id: pinned.view_id, run_id: null })).toMatchObject({ run_id: second.run_id, follow_current: true });
+    const third = f.root();
+    expect(f.tracking.read({ view_id: pinned.view_id })).toMatchObject({ run_id: third.run_id, follow_current: true });
+    // Reopening a history entry pins again; an opt-in open without a run keeps following.
+    expect(f.tracking.bind({ view_id: pinned.view_id, run_id: first.run_id })).toMatchObject({ run_id: first.run_id, follow_current: false });
+    expect(f.tracking.open({ context_key: "plain" })).toMatchObject({ run_id: third.run_id, follow_current: true });
+    expect(f.tracking.open({ context_key: "both", run_id: first.run_id, follow_current: true })).toMatchObject({ run_id: first.run_id, follow_current: true });
+    expect(f.tracking.open({ context_key: "explicit-off", follow_current: false })).toMatchObject({ follow_current: false });
+  });
+
+  it("publishes the follow mode in both declared output schemas", async () => {
+    const f = fixture(); const first = f.root();
+    const server = new TrackingMcpServer({ workspaceRoot: f.workspace, principal: "observer" }); cleanups.push(() => server.close());
+    const client = new Client({ name: "tracking-follow-test", version: "1" }); cleanups.push(() => client.close());
+    const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+    const tools = (await client.listTools()).tools;
+    const properties = (name: string) => (tools.find(tool => tool.name === name)!.outputSchema as { properties?: Record<string, unknown> }).properties;
+    expect(properties("bridge_tracking_open")).toHaveProperty("follow_current");
+    expect(properties("bridge_tracking_read")).toHaveProperty("follow_current");
+    // The SDK validates structuredContent against the declared schema, so a pass proves the DTO.
+    const opened = await client.callTool({ name: "bridge_tracking_open", arguments: { run_id: first.run_id } });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toMatchObject({ run_id: first.run_id, follow_current: false });
+    expect((opened._meta as Record<string, unknown>)?.["tracking_snapshot"]).toMatchObject({ follow_current: false });
+    const viewIdValue = (opened.structuredContent as Record<string, unknown>)["view_id"];
+    const read = await client.callTool({ name: "bridge_tracking_read", arguments: { view_id: viewIdValue } });
+    expect(read.isError).not.toBe(true);
+    expect(read.structuredContent).toMatchObject({ run_id: first.run_id, follow_current: false });
+    const bound = await client.callTool({ name: "bridge_tracking_bind", arguments: { view_id: viewIdValue, run_id: null } });
+    expect(bound.isError).not.toBe(true);
+    expect(bound.structuredContent).toMatchObject({ follow_current: true });
+  });
+});
+
+describe("browser display resolves a trusted system launcher", () => {
+  const target = "http://127.0.0.1:52345/#view=view_0123456789abcdef0123456789abcdef&token=opaque";
+  // Resolution only: no candidate is ever executed, including under a hostile environment.
+  const probe = (options: NonNullable<Parameters<typeof resolveTrackingLauncher>[1]> = {}) => {
+    const probed: string[] = [];
+    const launcher = resolveTrackingLauncher(target, {
+      isSystemFile: path => { probed.push(path); return true; }, ...options,
+    });
+    return { launcher, probed };
+  };
+
+  it("never searches the working directory or PATH for the launcher", () => {
+    const windows = probe({ platform: "win32", env: { SystemRoot: "C:\\Windows" } });
+    expect(windows.launcher.command).toBe(join("C:\\Windows", "System32", "rundll32.exe"));
+    expect(windows.launcher.cwd).toBe(join("C:\\Windows", "System32"));
+    expect(windows.launcher.args).toEqual(["url.dll,FileProtocolHandler", target]);
+    expect(windows.probed).toEqual([join("C:\\Windows", "System32", "rundll32.exe"), join("C:\\Windows", "System32", "url.dll")]);
+    for (const path of windows.probed) expect(win32.isAbsolute(path)).toBe(true);
+
+    const mac = probe({ platform: "darwin", env: {} });
+    expect(mac.launcher).toEqual({ command: "/usr/bin/open", args: [target], cwd: "/usr/bin" });
+    const linux = probe({ platform: "linux", env: { PATH: "." } });
+    expect(linux.launcher).toEqual({ command: "/usr/bin/xdg-open", args: [target], cwd: "/usr/bin" });
+    const fallback = resolveTrackingLauncher(target, { platform: "linux", env: {}, isSystemFile: path => path === "/bin/xdg-open" });
+    expect(fallback).toEqual({ command: "/bin/xdg-open", args: [target], cwd: "/bin" });
+  });
+
+  it("ignores a tampered Windows root and refuses a platform without a system launcher", () => {
+    const hostile = probe({ platform: "win32", env: { SystemRoot: "System32", windir: "\\\\attacker\\share\\Windows" } });
+    expect(hostile.launcher.command).toBe(join("C:\\Windows", "System32", "rundll32.exe"));
+    expect(hostile.probed.join("|")).not.toMatch(/attacker|^System32/u);
+    // An incomplete system directory is refused rather than spawned and silently ignored.
+    expect(() => resolveTrackingLauncher(target, { platform: "win32", env: { SystemRoot: "C:\\Windows" }, isSystemFile: path => path.endsWith("rundll32.exe") }))
+      .toThrow("BROWSER_UNAVAILABLE");
+    expect(() => resolveTrackingLauncher(target, { platform: "linux", env: {}, isSystemFile: () => false })).toThrow("BROWSER_UNAVAILABLE");
+  });
+
+  it("refuses any target that is not the loopback observer page, without resolving a launcher", async () => {
+    for (const hostile of ["https://attacker.example/", "file:///etc/passwd", "http://attacker.example/", "http://127.0.0.1.attacker.example/",
+      "http://user:pass@127.0.0.1:52345/", "javascript:alert(1)", "not a url", "--gpu-launcher=calc.exe"]) {
+      expect(() => resolveTrackingLauncher(hostile, { platform: "win32", env: { SystemRoot: "C:\\Windows" }, isSystemFile: () => { throw new Error("resolution must not start"); } }))
+        .toThrow("BROWSER_OPEN_FAILED");
+      await expect(openTrackingBrowser(hostile)).rejects.toThrow("BROWSER_OPEN_FAILED");
+    }
+  });
+
+  it("resolves an existing absolute launcher on this host", () => {
+    if (process.platform !== "win32" && process.platform !== "darwin" && !existsSync("/usr/bin/xdg-open") && !existsSync("/bin/xdg-open")) return;
+    const launcher = resolveTrackingLauncher(target);
+    expect(isAbsolute(launcher.command)).toBe(true);
+    expect(existsSync(launcher.command)).toBe(true);
+    expect(lstatSync(launcher.command).isFile()).toBe(true);
+    expect(launcher.args.at(-1)).toBe(target);
   });
 });

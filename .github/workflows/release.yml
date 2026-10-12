@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated release tag (for example v0.3.0)
+        description: Existing annotated release tag (for example v0.4.0)
         required: true
         type: string
 
@@ -48,6 +48,8 @@ jobs:
       - run: npm test
       - run: npm run skills:check
       - run: npm run links:check
+      - run: node scripts/test-shared-memory.mjs
+      - run: node shared/web-audit/examples/cli-smoke.mjs
       - run: node docs/tools/check-doc-links.mjs
       - run: node scripts/certification-manifest.mjs
       - run: npm audit --audit-level=low
@@ -56,7 +58,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:tracking-ui
       - run: git diff --exit-code
-      - name: Create source, compiled distribution, skill and dependency inventory
+      - name: Create source, compiled distribution, both skills and dependency inventory
         run: |
           mkdir -p tmp/release-assets
           npm sbom --sbom-format cyclonedx --omit dev --workspaces --include-workspace-root > tmp/release-sbom.json
@@ -75,5 +77,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$RELEASE_TAG" tmp/release-assets/* --draft --verify-tag \
-            --title "$RELEASE_TAG - Durable execution and delegation tracking" \
+            --title "$RELEASE_TAG - Shared memory and experimental web audits" \
             --notes-file "docs/releases/$RELEASE_TAG.md"

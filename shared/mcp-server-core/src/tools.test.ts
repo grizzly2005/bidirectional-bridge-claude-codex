@@ -139,7 +139,7 @@ describe("MCP tool surface", () => {
     // to behave like one particular agent, would make the neutral package neutral in name
     // only and re-couple Codex to Claude's assumptions.
     for (const tool of TOOLS) {
-      expect(tool.name).toMatch(/^bridge_/);
+      expect(tool.name.startsWith("bridge_") || ["memory_get_context", "memory_upsert", "memory_get_changes"].includes(tool.name)).toBe(true);
       expect(tool.name).not.toMatch(/claude|codex|anthropic|openai/i);
     }
   });

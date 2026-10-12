@@ -13,13 +13,23 @@ and runtime telemetry, exposed to each client as a native project-scoped MCP ser
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
 
-The current checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.1).
+The latest published checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.1).
 See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
 opt-in delegation tracking, downloads and verification.
+
+The [v0.4.0 candidate](docs/releases/v0.4.0.md) adds
+[web-audit assistance and bridge reliability fixes](docs/web-audit-experimental.md)
+and [shared working memory](docs/shared-memory.md). Its bridge packages/runtime use0.4.0,
+wire marker1.4.0 and SQLite6; the experimental web-audit module retains its own0.1.0 version.
+These additions are not in the published v0.3.1 archives. Select a separate database for both
+clients using the [installation steps](docs/installation.md#experimental-branch-and-schema-6).
 
 ## Table of contents
 
 - [What problem it solves](#what-problem-it-solves)
+- [Development Coordination](#development-coordination)
+- [Security Research and Web Audit Assistance](#security-research-and-web-audit-assistance)
+- [Shared memory between Codex and Claude](#shared-memory-between-codex-and-claude)
 - [Project status and honest limits](#project-status-and-honest-limits)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
@@ -56,6 +66,58 @@ solves on its own. The bridge addresses them with explicit mechanisms:
 | Runtime observability | One normalized final telemetry record per attempt |
 | Claude profile drift | Bridge-owned `opus` / `high` launch profile with actual-model validation |
 | Caller spoofing | Identity bound when the MCP process starts |
+| Lost working context between sessions | Versioned shared notes, bounded context and a changes cursor |
+
+## Development Coordination
+
+Use one agent as the manager and delegate a bounded implementation or independent review to
+the other. Tasks, path leases and verification evidence make the handoff explicit. Shared
+memory preserves design decisions, important observations, unresolved questions and next
+actions when either client closes.
+
+Start with the [development continuity tutorial](docs/tutorials/shared-memory-development.md).
+Long designs and test logs stay in hashed artifacts; notes retain a short summary and their
+references. Concurrent note edits return a revision conflict for an explicit merge.
+
+## Security Research and Web Audit Assistance
+
+Use the [web-audit MVP](docs/web-audit-experimental.md) to structure an authorized web
+investigation: record actors, roles, objects and business state, rank hypotheses, identify
+missing comparisons, replay supported read recipes and prepare a refutation packet for
+another analyst. Campaign JSON holds the captures, hypothesis history and oracle evidence.
+Shared memory holds the working context, the next comparison and why a track was abandoned.
+
+Follow the [web investigation continuity tutorial](docs/tutorials/shared-memory-web-audit.md).
+The current importer accepts the documented JSON bundle; HAR/Burp ingestion is future work.
+Replay and automatic verification cover a bounded differential GET workflow, and campaign
+files require one writer. Results on synthetic fixtures do not establish real-program yield.
+
+## Shared memory between Codex and Claude
+
+Both native clients select the same experimental database and exact project/program scope.
+Only three memory operations are exposed:
+
+| Stage | Operation and retained context |
+| --- | --- |
+| Codex prepares a handoff | `memory_get_context`, then `memory_upsert` for a decision, next action and artifact references |
+| Claude opens a new session | Read that scope and enrich the note using its own working task and the revision read |
+| Codex returns | `memory_get_changes` from its saved cursor retrieves Claude's new revision and preserves history |
+
+Try the executable demonstration after installing and building this branch:
+
+```powershell
+node scripts/test-shared-memory.mjs
+```
+
+It closes and reopens real MCP client/server processes around an on-disk fixture database,
+checks the delta and retained references, and tests a concurrent revision conflict. Its
+default mode invokes no model or external target. The [memory guide](docs/shared-memory.md#executable-restart-demonstration)
+also shows how an actual Claude session can perform the middle stage.
+
+Native managers call the memory MCP tools. **Delegated Codex workers have the project bridge
+MCP disabled**: the manager reads a bounded context, sends it through an input artifact and
+persists the worker's proposed delta with a reference to its output. Do not assume a delegated
+worker can call these tools directly.
 
 ## Project status and honest limits
 
@@ -440,6 +502,7 @@ because this release publishes source on GitHub, not packages to the npm registr
 - [Architecture](docs/architecture.md) — packages, data flow, invariants
 - [Installation](docs/installation.md) — requirements, deterministic setup, project MCP config
 - [Usage](docs/usage.md) — manager workflow, worked examples, writing tasks
+- [Shared memory (experimental)](docs/shared-memory.md) — bounded context, revisions, lifecycle and changes
 - [Telemetry](docs/telemetry.md) — recorded fields, sources, privacy boundary
 - [Recovery](docs/recovery.md) — persisted handles, strict same-task resume
 - [Troubleshooting](docs/troubleshooting.md) — symptoms, checks, and fixes
