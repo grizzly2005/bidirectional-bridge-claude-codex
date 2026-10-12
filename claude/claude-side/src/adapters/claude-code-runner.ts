@@ -693,7 +693,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const grace = this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
     const stopDeadline = Date.now() + (this.options.stopTimeoutMs ?? grace + 10_000);
     const command = (binary: string, args: string[]): Promise<string> => new Promise((resolve, reject) => {
-      const timeout = Math.max(1, Math.min(5_000, stopDeadline - Date.now()));
+      // Cold Windows process inspection can exceed 5s; keep it inside the stop deadline.
+      const timeout = Math.max(1, stopDeadline - Date.now());
       execFile(binary, args, { windowsHide: true, encoding: "utf8", timeout, maxBuffer: 4 * 1024 * 1024 },
         (error, stdout) => error ? reject(error) : resolve(stdout));
     });

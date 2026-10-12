@@ -139,6 +139,7 @@
     "claude/claude-side/src/adapters/claude-adapter.ts",
     "claude/claude-side/src/adapters/claude-code-runner.test.ts",
     "claude/claude-side/src/adapters/claude-code-runner.ts",
+    "claude/claude-side/src/adapters/claude-code-stop-budget.test.ts",
     "claude/claude-side/src/adapters/mock-codex-adapter.ts",
     "claude/claude-side/src/index.ts",
     "claude/claude-side/src/integration.test.ts",

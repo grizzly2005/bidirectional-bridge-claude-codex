@@ -44,6 +44,8 @@ No changes recorded yet.
   tracking test, including when the suite runs on Linux.
 - Reread final task state after an execution stops during cross-process cancellation polling;
   a worker committing between the two reads no longer returns a stale WORKING/false result.
+- Allow cold Windows process inspection to use the remaining declared stop deadline instead
+  of a shorter per-command limit; timed-out inspection still cannot certify worker termination.
 
 ### Documentation
 
