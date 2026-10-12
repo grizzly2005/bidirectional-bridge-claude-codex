@@ -28,12 +28,14 @@ import {
   type ResumeDelegatedTaskRequest,
   type ResumeTaskOutcome,
   type ResumeTaskRequest,
+  type RunId,
   type StatusUpdate,
   type Task,
   type TaskInvocation,
   type VerificationResult,
 } from "@bridge/protocol";
 import type { ControlPlane } from "./control-plane.js";
+import { VerificationRejectedError } from "./deliverable-service.js";
 import { normalizeAttemptTelemetry } from "./attempt-service.js";
 import { hashRequest } from "./idempotency.js";
 import { DelegationOperations } from "./delegation-operation.js";
@@ -43,6 +45,14 @@ export interface DelegateOptions {
   /** Extra time beyond `deadline_ms` before the lease lapses; default 30s. */
   readonly leaseGraceMs?: number;
   readonly onEvent?: (type: string, detail: Record<string, unknown>) => void;
+}
+
+export interface RunReadyOptions extends DelegateOptions {
+  /** Restrict a scheduler pass to the intended run, leaving other native tasks alone. */
+  readonly run_id?: RunId;
+  /** TaskSpec has no input references; supply each ready task's expected artifacts here.
+   * The first reservation freezes them for recovery. Omission means no inputs expected. */
+  readonly input_artifacts?: Readonly<Record<string, readonly ArtifactId[]>>;
 }
 
 const DEFAULT_LEASE_GRACE_MS = 30_000;
@@ -151,7 +161,12 @@ export class Orchestrator {
       });
     }
 
-    const { operation, owned } = this.operations.reserve(request);
+    return this.runReservedDelegation(this.operations.reserve(request), options);
+  }
+
+  private async runReservedDelegation(
+    { operation, owned }: { operation: DelegationOperation; owned: boolean }, options: DelegateOptions,
+  ): Promise<DelegationOutcome> {
     if (operation.outcome) return operation.outcome;
     const existing = this.activeDelegations.get(operation.task_id);
     if (existing) return existing;
@@ -174,8 +189,9 @@ export class Orchestrator {
     // system retried when it did not.
     let attemptsMade = 0;
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      attemptsMade = attempt + 1;
+    const initialAttempt = task.attempt;
+    for (let attempt = initialAttempt; attempt < initialAttempt + maxAttempts; attempt++) {
+      attemptsMade = attempt - initialAttempt + 1;
       try {
         const deliverable = await this.runAttempt(task, request, attempt, started, options, operation);
         return this.operations.finish(operation, {
@@ -183,7 +199,7 @@ export class Orchestrator {
           delegate: request.to,
           deliverable,
           error: null,
-          attempts: attempt + 1,
+          attempts: attemptsMade,
           duration_ms: this.cp.clock.now() - started,
           observation: this.cp.attempts.observation(task.task_id, attempt),
         });
@@ -191,7 +207,7 @@ export class Orchestrator {
         lastError = BridgeError.from(err);
         // Contention happens before an attempt record or runtime exists. Escalate the
         // existing task instead of resetting it through an illegal CLAIMED -> FAILED edge.
-        if (this.cp.attempts.get(task.task_id, attempt) === undefined) attemptsMade = attempt;
+        if (this.cp.attempts.get(task.task_id, attempt) === undefined) attemptsMade = attempt - initialAttempt;
         options.onEvent?.("attempt_failed", {
           task_id: task.task_id,
           attempt,
@@ -207,7 +223,7 @@ export class Orchestrator {
           lastError = new BridgeError(ErrorCode.TASK_CANCELLED, "Cancellation takes precedence over retry", { runtime_stop_confirmed: true });
         }
         const canRetry = !this.stopping && lastError.code !== ErrorCode.SCOPE_CONFLICT
-          && attempt + 1 < maxAttempts && lastError.retryable
+          && attempt + 1 < initialAttempt + maxAttempts && lastError.retryable
           && this.cp.store.getExecution(task.task_id)?.runtime_stop_confirmed === true
           && !["quota", "auth", "profile", "contract", "turn_limit"].includes(
             runtimeFailure?.category ?? "unknown")
@@ -227,7 +243,7 @@ export class Orchestrator {
               task_id: task.task_id, agent: request.to, to: TaskState.FAILED,
               reason: `attempt ${attempt} failed: ${lastError!.code}`,
             });
-            this.cp.tasks.retry(task.task_id, request.from, maxAttempts);
+            this.cp.tasks.retry(task.task_id, request.from, initialAttempt + maxAttempts);
           });
         } catch (retryError) {
           lastError = BridgeError.from(retryError);
@@ -309,7 +325,7 @@ export class Orchestrator {
           payload: { status: deliverable.status, attempt, artifacts: deliverable.artifacts } }, this.cp.clock.now());
         this.operations.finish(operation, { task_id: task.task_id, delegate: request.to, deliverable,
           error: observation.accepted ? null : { code: ErrorCode.TELEMETRY_INCOMPLETE, message: "Strict observation requirements are incomplete" },
-          attempts: attempt + 1, duration_ms: Math.max(0, this.cp.clock.now() - orchestrationStartedAt), observation });
+          attempts: attempt - task.attempt + 1, duration_ms: Math.max(0, this.cp.clock.now() - orchestrationStartedAt), observation });
       });
     if (result.error) throw result.error;
     return result.deliverable!;
@@ -440,7 +456,7 @@ export class Orchestrator {
       if (this.cp.executions.assertGeneration(execution).cancel_requested_at !== null && returned) {
         returned = null; error = new BridgeError(ErrorCode.TASK_CANCELLED, "Cancellation won the result commit race", { runtime_stop_confirmed: stopped });
       }
-      if (returned) deliverable = this.cp.deliverables.submit(returned);
+      if (returned) deliverable = this.cp.deliverables.submit(returned, { attempt: execution.attempt });
       this.cp.attempts.end(task.task_id, execution.attempt, execution.agent, deliverable?.status ?? error!.code);
       this.cp.store.putObservation(draft);
       const observation = this.cp.attempts.sealObservation(task.task_id, execution.attempt);
@@ -457,13 +473,22 @@ export class Orchestrator {
         this.cp.executions.update(execution, { phase: "STOPPED", runtime_stop_confirmed: true });
         this.cp.leases.release(execution.lease_id!, execution.agent);
       } else this.cp.leases.quarantine(execution.lease_id!, execution.agent);
-      if (deliverable) onSuccess?.(deliverable, observation);
+      if (deliverable && !error) onSuccess?.(deliverable, observation);
       onFinalized?.(finalResult(), observation);
     }); };
     try { commit(); }
     catch (commitError) {
       if (!returned) throw commitError;
-      error = BridgeError.from(commitError); returned = null; deliverable = null;
+      error = BridgeError.from(commitError);
+      // The runtime has stopped and useful outputs exist. Only a verification refusal
+      // may downgrade COMPLETE; schema, authority and storage faults keep their errors.
+      if (commitError instanceof VerificationRejectedError && stopped && returned.status === DeliverableStatus.COMPLETE) {
+        returned = { ...returned, status: DeliverableStatus.PARTIAL,
+          remaining_risks: [`COMPLETE refused: ${commitError.message}`.slice(0, 2000), ...returned.remaining_risks],
+          dependencies_unblocked: [],
+          recommended_next_action: "Resolve the current attempt's verification failure and submit a verified result." };
+      } else returned = null;
+      deliverable = null;
       telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED };
       draft = this.cp.attempts.prepareObservation(telemetry, task.spec.telemetry_mode === "strict");
       commit();
@@ -1163,6 +1188,7 @@ export class Orchestrator {
     };
     const guarded = <T>(fn: () => T): T => cp.store.transaction(() => { assertCallback(); return fn(); });
     return {
+      max_inline_artifact_bytes: cp.artifacts.maxInlineBytes,
       async saveExecutionHandle(handle: string): Promise<void> {
         guarded(() => { onExecutionHandle?.(handle); cp.attempts.saveHandle(task_id, attempt, agent, handle); });
       },
@@ -1203,7 +1229,7 @@ export class Orchestrator {
         return artifact.artifact_id;
       },
       async recordVerification(result: VerificationResult): Promise<void> {
-        guarded(() => cp.deliverables.recordVerification(task_id, agent, result));
+        guarded(() => cp.deliverables.recordVerification(task_id, agent, result, attempt));
       },
       async raiseBlocker(reason: string): Promise<void> {
         guarded(() => cp.tasks.block(task_id, agent, reason));
@@ -1213,42 +1239,50 @@ export class Orchestrator {
   }
 
   /**
-   * Run every currently-ready task through its preferred adapter, in parallel.
-   *
-   * Concurrency is bounded implicitly by lease conflicts: two ready tasks with overlapping
-   * scopes cannot both acquire, so one fails fast with SCOPE_CONFLICT and stays PENDING for
-   * the next pass rather than corrupting the other's files.
+   * Run the existing currently-ready tasks through shared admission and execution fencing.
+   * A contended task is BLOCKED in place and can use the normal continuation path.
    */
   async runReady(
     defaultAgent: AgentId,
     deadline_ms: number,
-    options: DelegateOptions = {},
+    options: RunReadyOptions = {},
   ): Promise<DelegationOutcome[]> {
-    const ready = this.cp.tasks.readyTasks();
+    this.assertRunning();
+    const ready = this.cp.tasks.readyTasks().filter(task => {
+      if (options.run_id !== undefined && task.run_id !== options.run_id) return false;
+      // Native delegations have their own executor and recovery path. A scheduler pass
+      // must not adopt a pending reservation that another launch still owns.
+      const operation = this.cp.store.firstDelegationOperation(task.task_id);
+      return operation === undefined || operation.phase === "FINISHED" ||
+        (operation.key === `run-ready:${task.task_id}:${task.attempt}` && operation.phase === "PREPARING");
+    });
     const results = await Promise.allSettled(
-      ready.map((task) =>
-        this.delegate(
-          {
-            from: "orchestrator",
-            to: task.spec.preferred_agent ?? defaultAgent,
-            spec: task.spec,
-            input_artifacts: [],
-            deadline_ms,
-          },
-          options,
-        ),
-      ),
+      ready.map(async task => {
+        const to = task.spec.preferred_agent ?? defaultAgent;
+        if (!this.cp.adapters.get(to)) throw new BridgeError(ErrorCode.NOT_FOUND, `no adapter registered for agent '${to}'`);
+        if (task.parent_task_id !== null) this.cp.tasks.assertDelegationTargetNotInAncestors(task.parent_task_id, to);
+        const frozen = this.cp.store.firstDelegationOperation(task.task_id)?.request.input_artifacts;
+        const supplied = options.input_artifacts?.[task.task_id];
+        if (frozen && supplied && hashRequest(frozen) !== hashRequest(supplied)) {
+          throw new BridgeError(ErrorCode.IDEMPOTENCY_MISMATCH, "runReady cannot replace the task's frozen inputs", { task_id: task.task_id });
+        }
+        const request: DelegationRequest = { from: task.created_by, to, spec: task.spec,
+          run_id: task.run_id, parent_task_id: task.parent_task_id, delegation_depth: task.delegation_depth,
+          input_artifacts: frozen ?? supplied ?? this.recoveryInputArtifactIds(task.task_id),
+          deadline_ms, idempotency_key: `run-ready:${task.task_id}:${task.attempt}` };
+        return this.runReservedDelegation(this.operations.reserveExisting(task.task_id, request), options);
+      }),
     );
-    return results.flatMap((r) =>
+    return results.flatMap((r, index) =>
       r.status === "fulfilled"
         ? [r.value]
         : [
             {
-              task_id: "",
-              delegate: defaultAgent,
+              task_id: ready[index]!.task_id,
+              delegate: ready[index]!.spec.preferred_agent ?? defaultAgent,
               deliverable: null,
-              error: { code: ErrorCode.INTERNAL, message: String(r.reason) },
-              attempts: 1,
+              error: { code: BridgeError.from(r.reason).code, message: BridgeError.from(r.reason).message },
+              attempts: 0,
               duration_ms: 0,
             } satisfies DelegationOutcome,
           ],

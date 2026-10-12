@@ -11,7 +11,7 @@
  * `scripts/live-claude-delegation.mjs` does, and it needs credentials.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,7 +127,7 @@ async function delegate(mode: string, opts: Record<string, unknown> = {}, deadli
   });
 }
 
-const readArgv = (): { args: string[]; cwd: string } => JSON.parse(readFileSync(argvFile, "utf8"));
+const readArgv = (): { args: string[]; cwd: string; stdin: string; stdinEof: boolean } => JSON.parse(readFileSync(argvFile, "utf8"));
 
 /** A full invocation, so a test can drive the adapter without the orchestrator. */
 function invocationFor(overrides: Partial<TaskInvocation> = {}): TaskInvocation {
@@ -498,12 +498,76 @@ describe("execution bounding", () => {
 
   it("embeds the task contract in the prompt, not free text", async () => {
     await delegate("ok");
-    const { args } = readArgv();
-    const prompt = args[args.indexOf("-p") + 1]!;
+    const { args, stdin: prompt, stdinEof } = readArgv();
+    expect(stdinEof).toBe(true);
+    expect(args).not.toContain(prompt);
     expect(prompt).toContain("report runtime information without modifying any source");
     expect(prompt).toContain("node --version runs");
     expect(prompt).toContain("claude/**");
     expect(prompt).toContain("Do not ask interactive questions");
+  });
+
+  it("delivers inline content and a frozen path through the actual stdin pipe", async () => {
+    const source = cp.tasks.create({ spec: spec({ scope: { paths: ["input.txt"] } }), created_by: "codex" });
+    writeFileSync(join(workspace, "input.txt"), "frozen-input-sentinel-é😀", "utf8");
+    const inline = cp.artifacts.publish({ task_id: source.task_id, produced_by: "codex", kind: "report",
+      name: "inline", inline: "inline-input-sentinel" });
+    const file = cp.artifacts.publish({ task_id: source.task_id, produced_by: "codex", kind: "file",
+      name: "file", path: "input.txt" });
+    const inputs = cp.artifacts.resolveForInvocation([inline.artifact_id, file.artifact_id]);
+    writeFileSync(join(workspace, "input.txt"), "changed-after-freeze");
+    const result = await runCapturing("ok", {}, { inputs, spec: spec({ scope: { paths: ["(no-write)/**"] } }) });
+    expect(result.error).toBeUndefined();
+    const { stdin, args, stdinEof } = readArgv();
+    expect(stdinEof).toBe(true);
+    expect(stdin).toContain("inline-input-sentinel");
+    expect(stdin).toContain(file.sha256);
+    expect(stdin).toContain(file.artifact_id);
+    expect(stdin).toContain(inputs[1]!.path!.replace(/\\/g, "\\\\"));
+    expect(readFileSync(join(workspace, inputs[1]!.path!), "utf8")).toBe("frozen-input-sentinel-é😀");
+    expect(args).not.toContain("--add-dir");
+  });
+
+  it("sends a valid contract longer than Windows argv through stdin with EOF", async () => {
+    const longSpec = spec({ verification_criteria: Array.from({ length: 40 }, (_, i) => `${i}:` + "é".repeat(990)) });
+    const result = await runCapturing("ok", {}, { spec: longSpec });
+    expect(result.error).toBeUndefined();
+    const captured = readArgv();
+    expect(captured.stdin.length).toBeGreaterThan(32_768);
+    expect(captured.stdin).toBe(buildPrompt(result.invocation, false, 4));
+    expect(captured.stdinEof).toBe(true);
+    expect(captured.args.join(" ").length).toBeLessThan(2_000);
+  });
+
+  it("rejects oversized aggregate input before launching Claude", async () => {
+    const inputs = [{ inline: "x".repeat(100_001) }] as TaskInvocation["inputs"];
+    const result = await runCapturing("ok", {}, { inputs });
+    expect(result.error).toMatchObject({ code: ErrorCode.INVALID_ARGUMENT });
+    expect(existsSync(argvFile)).toBe(false);
+  });
+
+  it("handles a child that exits without consuming a large stdin prompt", async () => {
+    const inputs = [{ inline: "é".repeat(100_000) }] as TaskInvocation["inputs"];
+    const result = await runCapturing("reject-input", {}, { inputs });
+    expect(result.error).toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect(result.telemetry.at(-1)?.termination_kind).toBe(AttemptTerminationKind.FAILED);
+  });
+
+  it("closes pending stdin and confirms stop when cancelled during input delivery", async () => {
+    const abort = new AbortController(); const states: string[] = [];
+    const timer = setTimeout(() => abort.abort(), 150);
+    try {
+      const result = await fixtureRunner("slow-input").run(invocationFor({ inputs: [
+        { inline: "é".repeat(100_000) },
+      ] as TaskInvocation["inputs"] }), {
+        report: async () => {}, publishArtifact: async () => "art_0000000000", recordVerification: async () => {},
+        raiseBlocker: async () => {}, saveExecutionHandle: async () => {},
+        reportRuntimeState: async state => { states.push(state); }, signal: abort.signal,
+      });
+      expect(result.blocker).toContain("cancelled");
+      expect(states.at(-1)).toBe("stopped");
+      expect(existsSync(argvFile)).toBe(false);
+    } finally { clearTimeout(timer); }
   });
 
   it("terminates a hung runtime at the deadline instead of running forever", async () => {
@@ -955,8 +1019,7 @@ describe("telemetry from a real Claude Code stream", () => {
     expect(t.termination_kind).toBe(AttemptTerminationKind.COMPLETED);
     expect(t.process_exit_code).toBe(0);
     // The prompt is measured, not carried: bytes of the contract the runtime received.
-    const { args } = readArgv();
-    const transmittedPrompt = args[args.indexOf("-p") + 1]!;
+    const { args, stdin: transmittedPrompt } = readArgv();
     expect(t.prompt_bytes).toBe(Buffer.byteLength(transmittedPrompt, "utf8"));
     expect(Number(/Turn ceiling: (\d+)/u.exec(transmittedPrompt)?.[1])).toBe(Number(args[args.indexOf("--max-turns") + 1]));
   });
@@ -1055,7 +1118,7 @@ describe("telemetry from a real Claude Code stream", () => {
     expect(telemetry[0]!.termination_kind).toBe(AttemptTerminationKind.COMPLETED);
     // A resumed run is prompted differently, and the byte count must reflect that.
     expect(telemetry[0]!.prompt_bytes).toBe(
-      Buffer.byteLength(readArgv().args[readArgv().args.indexOf("-p") + 1]!, "utf8"),
+      Buffer.byteLength(readArgv().stdin, "utf8"),
     );
   });
 

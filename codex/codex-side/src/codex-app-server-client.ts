@@ -324,7 +324,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
       const response = asRecord(
         await this.request(
           "thread/resume",
-          { threadId: request.thread_id },
+          { threadId: request.thread_id, ...(request.sandbox ? { sandbox: request.sandbox } : {}) },
           request.timeout_ms,
           request.signal,
         ),
@@ -351,7 +351,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
       initialized,
       request.timeout_ms,
       request.signal,
-      request.telemetry_mode ?? "operational", request.on_runtime_state,
+      request.telemetry_mode ?? "operational", request.on_runtime_state, request.sandbox,
     );
     } catch (error) {
       const failure = BridgeError.from(error);
@@ -457,6 +457,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
     signal: AbortSignal,
     telemetryMode: "operational" | "strict",
     onRuntimeState?: CodexStartRequest["on_runtime_state"],
+    sandbox?: CodexReplyRequest["sandbox"],
   ): Promise<CodexMcpResponse> {
     if (signal.aborted) throw new BridgeError(ErrorCode.TIMEOUT, "turn aborted before start", { runtime_stop_confirmed: true });
     if (this.activeTurns.has(threadId)) throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED,
@@ -470,7 +471,8 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
     const response = asRecord(
       await this.request(
         "turn/start",
-        { threadId, input: [{ type: "text", text: prompt }], ...(model !== null ? { model } : {}) },
+        { threadId, input: [{ type: "text", text: prompt }], ...(model !== null ? { model } : {}),
+          ...(sandbox === "read-only" ? { sandboxPolicy: { type: "readOnly", networkAccess: false } } : {}) },
         requestedTimeoutMs,
         signal,
       ),

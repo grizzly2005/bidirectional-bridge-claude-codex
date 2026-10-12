@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { ErrorCode } from "@bridge/protocol";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +31,26 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerProcessClient", () => {
+  it("preserves read-only overrides on persisted resume and another loaded-thread turn", async () => {
+    const workspace = mkdtempSync(resolve(tmpdir(), "codex-sandbox-"));
+    const log = resolve(workspace, "requests.jsonl");
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, `--record=${log}`] });
+    clients.push(client);
+    try {
+      const reply = { thread_id: "persisted-read-only", prompt: "fixture", cwd: process.cwd(),
+        sandbox: "read-only" as const, timeout_ms: 2_000, signal: new AbortController().signal };
+      await client.reply(reply); await client.reply(reply);
+      const messages = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(messages.filter(m => m.method === "thread/resume")).toHaveLength(1);
+      expect(messages.find(m => m.method === "thread/resume").params.sandbox).toBe("read-only");
+      const turns = messages.filter(m => m.method === "turn/start");
+      expect(turns).toHaveLength(2);
+      expect(turns.every(m => m.params.sandboxPolicy?.type === "readOnly")).toBe(true);
+    } finally {
+      await client.close();
+      rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  });
   it.each(["null", "array", "notification"])("contains malformed %s stdout frames without fabricating stop proof", async bad => {
     const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, `--bad-frame=${bad}`], stop_timeout_ms: 100 });
     clients.push(client);

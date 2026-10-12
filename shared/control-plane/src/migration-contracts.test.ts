@@ -27,8 +27,8 @@ function directory(): string {
   return path;
 }
 
-/** Fixed fixtures from the documented pre-v4 layouts, not extracted from current DDL. */
-function historicalDatabase(path: string, version: 1 | 2 | 3): void {
+/** Fixed historical layouts, not extracted from the current DDL. */
+function historicalDatabase(path: string, version: 1 | 2 | 3 | 4): void {
   const db = new DatabaseSync(path);
   try {
     db.exec(`
@@ -43,7 +43,7 @@ function historicalDatabase(path: string, version: 1 | 2 | 3): void {
       );
       CREATE TABLE task_dependencies(task_id TEXT NOT NULL, depends_on TEXT NOT NULL, PRIMARY KEY(task_id, depends_on));
       CREATE TABLE task_attempts(task_id TEXT NOT NULL, attempt INTEGER NOT NULL, agent TEXT NOT NULL,
-        ${version === 3 ? "resumed_from_attempt INTEGER," : ""}
+        ${version >= 3 ? "resumed_from_attempt INTEGER," : ""}
         execution_handle TEXT, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         ended_at INTEGER, outcome TEXT, PRIMARY KEY(task_id, attempt));
       CREATE TABLE leases(lease_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, holder TEXT NOT NULL,
@@ -74,7 +74,7 @@ function historicalDatabase(path: string, version: 1 | 2 | 3): void {
     db.prepare("INSERT INTO task_dependencies VALUES(?, ?)").run(CHILD_TASK, ROOT_TASK);
     for (const attempt of [0, 1]) {
       const values: Array<string | number | null> = [CHILD_TASK, attempt, "codex"];
-      if (version === 3) values.push(attempt === 1 ? 0 : null);
+      if (version >= 3) values.push(attempt === 1 ? 0 : null);
       values.push(`retained-session-${attempt}`, 12 + attempt, 20 + attempt, 22 + attempt, "TIMEOUT");
       db.prepare(`INSERT INTO task_attempts VALUES(${values.map(() => "?").join(",")})`).run(...values);
     }
@@ -89,10 +89,16 @@ function historicalDatabase(path: string, version: 1 | 2 | 3): void {
     db.prepare("INSERT INTO events VALUES(9, 'task.failed', ?, 'codex', 25, ?, NULL)").run(CHILD_TASK, OLD_PAYLOAD);
     db.prepare("INSERT INTO idempotency VALUES('old-key', 'task.create', ?, ?, 10)").run("a".repeat(64), OLD_PAYLOAD);
     db.prepare("INSERT INTO operator_extension VALUES('opaque', ?)").run(Buffer.from([0, 255, 128, 13, 10]));
-    if (version === 3) {
+    if (version >= 3) {
       db.exec("CREATE TABLE attempt_telemetry(task_id TEXT NOT NULL, attempt INTEGER NOT NULL, run_id TEXT NOT NULL, agent TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY(task_id, attempt));");
       db.prepare("INSERT INTO attempt_telemetry VALUES(?, 0, ?, 'codex', ?)").run(CHILD_TASK, RUN,
         '{ "task_id": "task_0000000002", "attempt": 0, "duration_measurement_version": 1, "input_tokens": null, "wall_duration_ms": 30 }');
+    }
+    if (version === 4) {
+      db.exec(`CREATE TABLE delegation_operations(caller TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL,
+        phase TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY(caller,key));
+        CREATE TABLE task_executions(task_id TEXT PRIMARY KEY, agent TEXT NOT NULL, phase TEXT NOT NULL, json TEXT NOT NULL);
+        CREATE TABLE attempt_observations(task_id TEXT NOT NULL, attempt INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY(task_id,attempt));`);
     }
   } finally { db.close(); }
 }
@@ -130,8 +136,8 @@ function rejectedOpen(path: string, journalMode: JournalMode = "auto"): unknown 
   finally { store?.close(); }
 }
 
-describe("v4 migration contracts", () => {
-  it.each([1, 2, 3] as const)("upgrades a copy of schema v%s while preserving the original snapshot and every historical field", version => {
+describe("v5 migration contracts", () => {
+  it.each([1, 2, 3, 4] as const)("upgrades a copy of schema v%s while preserving the original snapshot and every historical field", version => {
     const dir = directory(), original = join(dir, "snapshot.db"), working = join(dir, "candidate.db");
     historicalDatabase(original, version);
     const originalHash = hashFile(original), before = snapshot(original);
@@ -148,7 +154,7 @@ describe("v4 migration contracts", () => {
         parent_task_id: version === 1 ? null : ROOT_TASK, delegation_depth: version === 1 ? 0 : 1, attempt: 1,
       });
       expect(cp.store.listAttempts(CHILD_TASK).map(attempt => [attempt.execution_handle, attempt.resumed_from_attempt]))
-        .toEqual([["retained-session-0", null], ["retained-session-1", version === 3 ? 0 : null]]);
+        .toEqual([["retained-session-0", null], ["retained-session-1", version >= 3 ? 0 : null]]);
       expect(cp.attempts.observation(CHILD_TASK, 0)).toEqual({ status: "LEGACY_UNKNOWN", category: null, accepted: false, strict_required: false });
       expect(cp.store.listObservations()).toEqual([]);
       expect(cp.store.listExecutions()).toEqual([]);
@@ -156,7 +162,7 @@ describe("v4 migration contracts", () => {
     } finally { cp.close(); }
     const after = snapshot(working, before.columns);
     const historicalRows = { ...before.rows,
-      schema_meta: before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "4" } : row) };
+      schema_meta: before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row) };
     expect(after.rows).toEqual(historicalRows);
     const upgraded = snapshot(working);
     expect(upgraded.schema.filter(row => row["type"] === "table").map(row => row["name"]))
@@ -169,11 +175,36 @@ describe("v4 migration contracts", () => {
     expect(snapshot(working, before.columns).rows).toEqual(historicalRows);
   });
 
+  it("retains schema4 verification and deliverable JSON with unknown attempt freshness, never as current proof", () => {
+    const dir = directory(), path = join(dir, "candidate.db"); historicalDatabase(path, 4);
+    const check = { kind: "test", command: "historical passing check", passed: true, exit_code: 0, summary: "historical" };
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO verifications(task_id,kind,passed,json) VALUES(?,'test',1,?)").run(CHILD_TASK, JSON.stringify(check));
+    db.close(); const before = snapshot(path);
+    const cp = ControlPlane.open({ workspaceRoot: dir, databasePath: path, journalMode: "DELETE" });
+    try {
+      expect(cp.deliverables.listVerifications(CHILD_TASK, null)).toEqual([check]);
+      expect(cp.deliverables.listVerifications(CHILD_TASK, 1)).toEqual([]);
+      cp.tasks.retry(CHILD_TASK, "claude", 3); cp.tasks.claim(CHILD_TASK, "codex");
+      cp.tasks.transition({ task_id: CHILD_TASK, agent: "codex", to: "WORKING" });
+      expect(() => cp.deliverables.submit({ task_id: CHILD_TASK, agent: "codex", status: "COMPLETE", summary: "empty current proof",
+        changed_scope: [], artifacts: [], commit_or_diff: null, verification_performed: [], verification_results: [],
+        remaining_risks: [], dependencies_unblocked: [], recommended_next_action: "check again", at: 30 })).toThrow(/no passing verification/);
+      expect(cp.deliverables.get(CHILD_TASK)).toBeUndefined();
+    } finally { cp.close(); }
+    const after = snapshot(path);
+    expect(after.rows["verifications"]!.map(({ attempt, ...row }) => row)).toEqual(before.rows["verifications"]);
+    expect(after.rows["verifications"]!.every(row => row["attempt"] === null)).toBe(true);
+    expect(after.rows["deliverables"]!.map(({ attempt, ...row }) => row)).toEqual(before.rows["deliverables"]);
+    expect(after.rows["deliverables"]!.every(row => row["attempt"] === null)).toBe(true);
+    expect(after.schema.some(row => row["name"] === "idx_verif_task_attempt")).toBe(true);
+  });
+
   it("rolls back all DDL and projected run ids when the final version commit fails", () => {
     const dir = directory(), path = join(dir, "candidate.db");
     historicalDatabase(path, 1);
     const db = new DatabaseSync(path);
-    db.exec("CREATE TRIGGER reject_schema_commit BEFORE INSERT ON schema_meta WHEN NEW.key='schema_version' AND NEW.value='4' BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END;");
+    db.exec("CREATE TRIGGER reject_schema_commit BEFORE INSERT ON schema_meta WHEN NEW.key='schema_version' AND NEW.value='5' BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END;");
     db.close();
     const before = snapshot(path), error = rejectedOpen(path, "DELETE");
     expect(error).toBeInstanceOf(Error);
@@ -256,7 +287,7 @@ describe("v4 migration contracts", () => {
     const rows = snapshot(path, before.columns).rows;
     expect(rows["events"]).toEqual(before.rows["events"]);
     expect(rows["task_attempts"]).toEqual(before.rows["task_attempts"]);
-    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "4" } : row));
+    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row));
   });
 
   it("waits for a copied hot rollback journal to become readable before opening the original", async () => {
@@ -291,6 +322,6 @@ describe("v4 migration contracts", () => {
     const rows = snapshot(path, before.columns).rows;
     expect(rows["events"]).toEqual(before.rows["events"]);
     expect(rows["task_attempts"]).toEqual(before.rows["task_attempts"]);
-    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "4" } : row));
+    expect(rows["schema_meta"]).toEqual(before.rows["schema_meta"]!.map(row => row["key"] === "schema_version" ? { ...row, value: "5" } : row));
   });
 });

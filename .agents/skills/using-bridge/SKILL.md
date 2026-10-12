@@ -172,6 +172,16 @@ The server enforces core invariants, but shell access is not an OS-level scope s
 
 Use exact changed paths only. An inspected file is not a produced artifact. A path artifact must exist and fit the leased output scope; otherwise use an inline report. Never invent checks, paths, test totals, or successful exit codes.
 
+On the experimental web-audit branch, the standalone `(no-write)` namespace denotes a
+read-only execution mode: it retains a durable lease for lifecycle and recovery, grants no
+path writes, and does not conflict with other tasks' write scopes. Do not mix it with write
+globs. Codex uses a read-only sandbox for these tasks; the Claude contract and result gate
+require `changed_scope: []` and inline outputs. CLI directory access is not an OS sandbox.
+
+The experimental database uses schema 5. Keep it separate from a schema-4 release database;
+older binaries cannot reopen a database upgraded to version 5. Existing verification history
+is retained, but old rows without a known attempt do not certify a new attempt.
+
 For reviews, separate a demonstrated blocker from a nonblocking remark or future proposal.
 Tie findings to the inspected revision and preserve useful counterexamples. After two cycles
 without progress on the same cause, inspect the contract or external blocker before another

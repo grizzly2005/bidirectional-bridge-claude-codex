@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const omitUsage = process.argv.includes("--omit-usage");
 const multiUsage = process.argv.includes("--multi-usage");
@@ -33,6 +34,10 @@ const resultText = () =>
 createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
+  const record = process.argv.find(arg => arg.startsWith("--record="))?.slice("--record=".length);
+  if (record && ["thread/start", "thread/resume", "turn/start"].includes(message.method)) {
+    appendFileSync(record, `${JSON.stringify({ method: message.method, params: message.params })}\n`);
+  }
   if (message.id === undefined) return;
 
   if (message.method === "initialize") {

@@ -31,7 +31,7 @@ export { AttemptService, normalizeAttemptTelemetry } from "./attempt-service.js"
 export type { NormalizeAttemptTelemetryInput } from "./attempt-service.js";
 
 export { Orchestrator } from "./orchestrator.js";
-export type { DelegateOptions } from "./orchestrator.js";
+export type { DelegateOptions, RunReadyOptions } from "./orchestrator.js";
 
 export { ManualClock, systemClock } from "./clock.js";
 export type { Clock } from "./clock.js";

@@ -148,6 +148,11 @@ export class LeaseManager {
       if (held.holder === holder && held.task_id === task_id && held.state === LeaseState.HELD &&
           (execution === undefined || execution.runtime_stop_confirmed === true)) continue;
       const overlapping = conflictingPairs(scope, held.scope);
+      // Read-only leases are non-exclusive across tasks, but never bypass this task's
+      // running/quarantined execution generation by acquiring a second lease.
+      const fencedTask = held.task_id === task_id && (held.state === LeaseState.QUARANTINED ||
+        (execution?.lease_id === held.lease_id && execution.runtime_stop_confirmed !== true));
+      if (fencedTask && overlapping.length === 0) overlapping.push([scope.paths[0]!, held.scope.paths[0]!]);
       if (overlapping.length > 0) {
         out.push({
           lease_id: held.lease_id,

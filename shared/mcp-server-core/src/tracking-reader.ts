@@ -43,6 +43,12 @@ export class TrackingReader {
   constructor(readonly path: string) {}
   close(): void { this.db?.close(); this.db = undefined; }
 
+  private schemaVersion(db: InstanceType<typeof DatabaseCtor>): "4" | "5" {
+    const version = (db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined)?.["value"];
+    if (version !== "4" && version !== "5") throw new TrackingError("UNSUPPORTED_SCHEMA");
+    return version;
+  }
+
   private connect(): InstanceType<typeof DatabaseCtor> | undefined {
     if (!existsSync(this.path)) { this.close(); this.identity = "missing"; return undefined; }
     const stat = statSync(this.path);
@@ -52,21 +58,20 @@ export class TrackingReader {
       const db = new DatabaseSync(this.path, { readOnly: true });
       try {
         db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=150;");
-        const version = db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined;
-        if (version?.["value"] !== "4") throw new TrackingError("UNSUPPORTED_SCHEMA");
+        this.schemaVersion(db);
       } catch (err) { db.close(); if (err instanceof TrackingError) throw err; throw new TrackingError("DATABASE_UNAVAILABLE"); }
       this.db = db; this.identity = identity;
     }
     return this.db;
   }
 
-  private transaction<T>(read: (db: InstanceType<typeof DatabaseCtor> | undefined) => T): T {
+  private transaction<T>(read: (db: InstanceType<typeof DatabaseCtor> | undefined, version?: "4" | "5") => T): T {
     const db = this.connect();
     if (!db) return read(undefined);
     try {
       db.exec("BEGIN");
-      if ((db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as Row | undefined)?.["value"] !== "4") throw new TrackingError("UNSUPPORTED_SCHEMA");
-      const value = read(db); db.exec("COMMIT"); return value;
+      const version = this.schemaVersion(db);
+      const value = read(db, version); db.exec("COMMIT"); return value;
     }
     catch (err) { try { db.exec("ROLLBACK"); } catch { /* read transaction may already have ended */ }
       if (err instanceof TrackingError) throw err; throw new TrackingError("DATABASE_UNAVAILABLE"); }
@@ -85,22 +90,26 @@ export class TrackingReader {
   }
 
   snapshot(runId: string | null, after?: { database: string; event: number }) {
-    return this.transaction(db => {
+    return this.transaction((db, version) => {
       const head = db ? Number((db.prepare("SELECT COALESCE(MAX(event_id),0) AS id FROM events").get() as Row)["id"]) : 0;
       if (after && (after.database !== this.identity || after.event > head)) throw new TrackingError("CURSOR_RESET_REQUIRED");
       if (!db || !runId) return { database: this.identity, snapshot_event_id: head, cursor_event: head, has_more: false, tasks: [], attempts: [], links: [], truncated: false };
+      // Schema 4 cannot establish check freshness. Keep its historical projection; v5
+      // counts only the current attempt, including final evidence submitted without callbacks.
+      const currentVerification = version === "5" ? " AND v.attempt=t.attempt" : "";
+      const currentDeliverable = version === "5" ? " AND d.attempt=t.attempt" : "";
       const rows = db.prepare(`SELECT t.task_id,t.run_id,t.parent_task_id,t.delegation_depth,t.state,t.owner,t.created_at,t.updated_at,t.attempt,
         d.status AS business_status,x.phase,CASE WHEN length(x.json)<=64000 THEN x.json END AS execution_json,
         CASE WHEN length(o.json)<=64000 THEN o.json END AS observation_json,
         CASE WHEN json_type(CASE WHEN json_valid(d.json) THEN d.json ELSE '{}' END,'$.verification_results')='array'
           THEN (SELECT COUNT(*) FROM json_each(d.json,'$.verification_results') v
             WHERE CASE WHEN v.type='object' THEN json_type(v.value,'$.passed')='true' ELSE 0 END)
-          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=1) END AS passed,
+          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=1${currentVerification}) END AS passed,
         CASE WHEN json_type(CASE WHEN json_valid(d.json) THEN d.json ELSE '{}' END,'$.verification_results')='array'
           THEN (SELECT COUNT(*) FROM json_each(d.json,'$.verification_results') v
             WHERE CASE WHEN v.type='object' THEN json_type(v.value,'$.passed')='false' ELSE 0 END)
-          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=0) END AS failed
-        FROM tasks t LEFT JOIN deliverables d ON d.task_id=t.task_id LEFT JOIN task_executions x ON x.task_id=t.task_id
+          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=0${currentVerification}) END AS failed
+        FROM tasks t LEFT JOIN deliverables d ON d.task_id=t.task_id${currentDeliverable} LEFT JOIN task_executions x ON x.task_id=t.task_id
         LEFT JOIN attempt_observations o ON o.task_id=t.task_id AND o.attempt=t.attempt
         WHERE t.run_id=? ORDER BY t.delegation_depth,t.created_at,t.task_id LIMIT ?`).all(runId, TRACKING_NODE_LIMIT + 1) as Row[];
       const selected = rows.slice(0, TRACKING_NODE_LIMIT);

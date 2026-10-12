@@ -7,6 +7,7 @@ import {
   DeliverableStatus,
   ErrorCode,
   TaskState,
+  isReadOnlyScope,
   type AdapterInfo,
   type AgentAdapter,
   type ArtifactId,
@@ -27,6 +28,7 @@ import {
   type CodexSandbox,
 } from "./codex-mcp-client.js";
 import { CodexAppServerProcessClient } from "./codex-app-server-client.js";
+import { publishCodexArtifact, ArtifactOutputPublicationError } from "./artifact-output.js";
 import {
   CODEX_DEVELOPER_INSTRUCTIONS,
   buildRepairPrompt,
@@ -512,6 +514,7 @@ export class CodexAdapter implements AgentAdapter {
     const runtimeTelemetry: MutableTelemetryUpdate = {};
     let runtimeLaunched = false;
     let runtimeStopConfirmed = false;
+    let acceptedResult: CodexTaskResult | undefined;
     let primaryError: unknown;
     const transportContext: InvocationContext = { ...ctx, reportRuntimeState: async state => {
       runtimeStopConfirmed = state === "stopped";
@@ -546,6 +549,7 @@ export class CodexAdapter implements AgentAdapter {
       if (parsed === undefined) {
         return this.invalidResultDeliverable(invocation);
       }
+      acceptedResult = parsed;
 
       await ctx.report({
         state: TaskState.VERIFYING,
@@ -557,23 +561,15 @@ export class CodexAdapter implements AgentAdapter {
         next_action: "Submit the structured deliverable to the control plane",
       });
 
-      for (const artifact of parsed.artifacts) {
-        if (controller.signal.aborted) throw abortError(active.reason);
-        const artifactId = await ctx.publishArtifact({
-          kind: artifact.kind,
-          name: artifact.name,
-          media_type: artifact.media_type,
-          ...(artifact.path !== undefined ? { path: artifact.path } : {}),
-          ...(artifact.inline !== undefined ? { inline: artifact.inline } : {}),
-          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
-        });
-        published.push(artifactId);
-      }
-
       for (const verification of parsed.verification_results) {
         if (controller.signal.aborted) throw abortError(active.reason);
         await ctx.recordVerification(verification);
         recorded.push(verification);
+      }
+
+      for (const artifact of parsed.artifacts) {
+        if (controller.signal.aborted) throw abortError(active.reason);
+        await publishCodexArtifact(artifact, ctx, published);
       }
 
       if (parsed.status === DeliverableStatus.PARTIAL && parsed.blocker !== undefined) {
@@ -602,11 +598,20 @@ export class CodexAdapter implements AgentAdapter {
       if (error instanceof BridgeError && error.details["runtime_failure"] !== undefined) {
         runtimeTelemetry.runtime_failure = error.details["runtime_failure"] as NonNullable<AttemptTelemetryUpdate["runtime_failure"]>;
       }
-      const confirmed = !runtimeLaunched || runtimeStopConfirmed || (error instanceof BridgeError && error.details["runtime_stop_confirmed"] === true)
+      const explicitStop = error instanceof BridgeError ? error.details["runtime_stop_confirmed"] : undefined;
+      const confirmed = explicitStop === false ? false : !runtimeLaunched || runtimeStopConfirmed || explicitStop === true
         || !this.client.supportsStopConfirmation;
       await ctx.reportRuntimeState?.(confirmed ? "stopped" : "unconfirmed");
       if (!confirmed) throw new BridgeError(ErrorCode.RUNTIME_STOP_UNCONFIRMED, "Codex transport did not confirm that the runtime stopped",
         { runtime_stop_confirmed: false, original_code: error instanceof BridgeError ? error.code : ErrorCode.ADAPTER_FAILURE });
+      if (error instanceof ArtifactOutputPublicationError && acceptedResult && !controller.signal.aborted) {
+        const reason = error.message;
+        await ctx.raiseBlocker(reason);
+        return this.toDeliverable(invocation, { ...acceptedResult, status: DeliverableStatus.PARTIAL,
+          summary: "Codex finished, but output publication is incomplete; existing fragments are preserved",
+          blocker: reason, remaining_risks: [reason, ...acceptedResult.remaining_risks],
+          recommended_next_action: "Resume the same task/session to republish missing output; do not treat fragments as a complete report" }, published, recorded);
+      }
       const timedOut =
         deadlineReached ||
         controller.signal.aborted ||
@@ -665,7 +670,11 @@ export class CodexAdapter implements AgentAdapter {
           next_action: "Re-validate the corrected deliverable without rerunning work",
         });
         const previousThreadId = response.thread_id;
+        // A new continuation cannot inherit the previous response's stop proof, even when
+        // an injected transport omits lifecycle callbacks. Only its settled reply ends it.
+        await ctx.reportRuntimeState?.("running");
         response = await this.client.reply({
+          ...(isReadOnlyScope(invocation.spec.scope) ? { sandbox: "read-only" as const } : {}),
           thread_id: response.thread_id,
           cwd: invocation.workspace_root,
           prompt: buildRepairPrompt(error),
@@ -674,6 +683,7 @@ export class CodexAdapter implements AgentAdapter {
           telemetry_mode: "operational",
           on_runtime_state: ctx.reportRuntimeState,
         });
+        await ctx.reportRuntimeState?.("stopped");
         onResponse(response);
         if (response.thread_id !== previousThreadId) {
           await ctx.saveExecutionHandle(response.thread_id);
@@ -706,6 +716,7 @@ export class CodexAdapter implements AgentAdapter {
       try {
         let handleSaved = false;
         const resumed = await this.client.reply({
+          ...(isReadOnlyScope(invocation.spec.scope) ? { sandbox: "read-only" as const } : {}),
           thread_id: previousHandle,
           cwd: invocation.workspace_root,
           prompt: buildResumePrompt(invocation),
@@ -751,7 +762,7 @@ export class CodexAdapter implements AgentAdapter {
       prompt: buildTaskPrompt(invocation),
       cwd: invocation.workspace_root,
       approval_policy: this.approvalPolicy,
-      sandbox: this.sandbox,
+      sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
       ...(this.model !== undefined ? { model: this.model } : {}),
       config: {
         mcp_servers: DELEGATED_CODEX_MCP_SERVERS,

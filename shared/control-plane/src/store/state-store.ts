@@ -157,10 +157,11 @@ export interface StateStore {
   // ---- status / deliverables / verification ----
   insertStatus(update: StatusUpdate): void;
   latestStatus(task_id: TaskId): StatusUpdate | undefined;
-  insertDeliverable(deliverable: Deliverable): void;
+  insertDeliverable(deliverable: Deliverable, attempt?: number): void;
   getDeliverable(task_id: TaskId): Deliverable | undefined;
-  insertVerification(task_id: TaskId, result: VerificationResult): void;
-  listVerifications(task_id: TaskId): VerificationResult[];
+  insertVerification(task_id: TaskId, result: VerificationResult, attempt: number): void;
+  /** Undefined returns history; null selects legacy rows whose attempt is unknown. */
+  listVerifications(task_id: TaskId, attempt?: number | null): VerificationResult[];
 
   // ---- event log ----
   appendEvent(event: EventAppend, at: number): BridgeEvent;

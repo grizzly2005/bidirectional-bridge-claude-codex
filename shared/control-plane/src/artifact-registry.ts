@@ -13,6 +13,7 @@ import { isAbsolute, join } from "node:path";
 import {
   ArtifactSchema,
   BridgeError,
+  DEFAULT_INLINE_ARTIFACT_BYTES,
   ErrorCode,
   EventType,
   assertValid,
@@ -47,8 +48,6 @@ export interface ArtifactRegistryOptions {
   readonly inlineLimitBytes?: number;
 }
 
-const DEFAULT_INLINE_LIMIT = 64 * 1024;
-
 export class ArtifactRegistry {
   private readonly workspaceRoot: string;
   private readonly inlineLimit: number;
@@ -60,8 +59,11 @@ export class ArtifactRegistry {
     private readonly rng?: RandomSource,
   ) {
     this.workspaceRoot = options.workspaceRoot;
-    this.inlineLimit = options.inlineLimitBytes ?? DEFAULT_INLINE_LIMIT;
+    this.inlineLimit = options.inlineLimitBytes ?? DEFAULT_INLINE_ARTIFACT_BYTES;
   }
+
+  /** Transport adapters must fragment against the actual registry's UTF-8 byte budget. */
+  get maxInlineBytes(): number { return this.inlineLimit; }
 
   publish(input: PublishArtifactInput): Artifact {
     if ((input.inline === undefined) === (input.path === undefined)) {

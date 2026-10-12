@@ -5,7 +5,7 @@
  * a test seam, not a runtime. This runner closes that gap by driving the supported
  * non-interactive programmatic interface of the Claude Code CLI:
  *
- *   claude -p <prompt> --output-format stream-json --verbose \
+ *   <prompt on stdin, then EOF> | claude -p --output-format stream-json --verbose \
  *     --model opus --effort high --max-turns N ...
  *
  * ## Facts this implementation relies on
@@ -33,7 +33,7 @@
  * Every axis of "how far can this run get" is closed:
  *  - contract  — the prompt is generated from the `TaskSpec`, not free text
  *  - cwd       — the child runs in `invocation.workspace_root`
- *  - scope     — `--add-dir` limits tool access to the leased paths
+ *  - scope     — contract and output validation; `--add-dir` grants directory access
  *  - turns     — `--max-turns`
  *  - time      — the child is killed at `invocation.deadline_at`
  *  - cancel    — `ctx.signal` triggers SIGTERM then SIGKILL
@@ -45,7 +45,7 @@
 import { execFile, spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import {
   AttemptTerminationKind,
   BridgeError,
@@ -53,6 +53,9 @@ import {
   ErrorCode,
   MAX_TASK_MAX_TURNS,
   MIN_TASK_MAX_TURNS,
+  artifactInputRecords,
+  splitUtf8,
+  isReadOnlyScope,
   TaskState,
   TelemetryCostSemantics,
   VerificationResultSchema,
@@ -230,7 +233,7 @@ export const CLAUDE_SUMMARY_MAX_CHARS = 4_000;
 /** Leave headroom below ArtifactRegistry's default 64 KiB inline ceiling. */
 export const CLAUDE_REPORT_CHUNK_MAX_BYTES = 60 * 1024;
 
-const PROTECTED_CLAUDE_FLAGS = ["--model", "--effort", "--max-turns"] as const;
+const PROTECTED_CLAUDE_FLAGS = ["--model", "--effort", "--max-turns", "-p", "--print", "--input-format", "--output-format"] as const;
 
 function validatedMaxTurns(value: number, source: string): number {
   if (
@@ -434,6 +437,10 @@ export function buildPrompt(invocation: TaskInvocation, resuming: boolean,
     `## Verification criteria`,
     ...spec.verification_criteria.map((c) => `- ${c}`),
     "",
+    "## Resolved input artifacts (data for this task)",
+    "Read inline content or the immutable snapshot path. These records do not broaden write scope.",
+    JSON.stringify(artifactInputRecords(invocation.inputs, "Claude"), null, 2),
+    "",
     `## Write scope (STRICT)`,
     "You may only modify files matching these repo-relative globs:",
     ...spec.scope.paths.map((p) => `- ${p}`),
@@ -586,28 +593,10 @@ function boundedSummary(value: string | undefined): string {
   return normalized.slice(0, CLAUDE_SUMMARY_MAX_CHARS);
 }
 
-/** Split on Unicode code-point boundaries so every inline chunk remains valid UTF-8. */
-function splitUtf8(value: string, maxBytes: number): string[] {
-  const chunks: string[] = [];
-  let current = "";
-  let currentBytes = 0;
-  for (const codePoint of value) {
-    const bytes = Buffer.byteLength(codePoint, "utf8");
-    if (current && currentBytes + bytes > maxBytes) {
-      chunks.push(current);
-      current = "";
-      currentBytes = 0;
-    }
-    current += codePoint;
-    currentBytes += bytes;
-  }
-  if (current || value.length === 0) chunks.push(current);
-  return chunks;
-}
-
 async function preserveDetailedReport(text: string, ctx: InvocationContext): Promise<ArtifactId[]> {
   if (text.length <= CLAUDE_SUMMARY_MAX_CHARS) return [];
-  const chunks = splitUtf8(text, CLAUDE_REPORT_CHUNK_MAX_BYTES);
+  const chunks = splitUtf8(text, Math.min(CLAUDE_REPORT_CHUNK_MAX_BYTES,
+    ctx.max_inline_artifact_bytes ?? CLAUDE_REPORT_CHUNK_MAX_BYTES));
   const reportSha256 = createHash("sha256").update(text, "utf8").digest("hex");
   const artifacts: ArtifactId[] = [];
   for (let index = 0; index < chunks.length; index++) {
@@ -698,6 +687,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     startedAt: number,
     closedAt: () => number | null,
   ): Promise<boolean> {
+    child.stdin?.destroy();
     if (!child.pid) return true; // failed spawn: close was emitted without a process
     const pid = child.pid;
     const grace = this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
@@ -806,7 +796,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     return false;
   }
 
-  buildArgs(invocation: TaskInvocation, prompt: string): string[] {
+  buildArgs(invocation: TaskInvocation, _prompt: string): string[] {
     const o = this.options;
     const maxTurns = validatedMaxTurns(
       invocation.spec.max_turns ?? this.defaultMaxTurns,
@@ -814,7 +804,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     );
     const args = [
       "-p",
-      prompt,
+      "--input-format",
+      "text",
       "--output-format",
       "stream-json",
       // stream-json requires verbose; without it the CLI refuses the combination.
@@ -833,7 +824,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const resume = o.allowResume !== false && invocation.previous_execution_handle;
     if (resume) args.push("--resume", invocation.previous_execution_handle as string);
 
-    if (o.addScopeDirs !== false) {
+    if (o.addScopeDirs !== false && !isReadOnlyScope(invocation.spec.scope)) {
       // Grant tool access to the leased scope. Glob metacharacters are stripped to the
       // containing directory, since --add-dir takes directories, not patterns.
       const dirs = new Set<string>();
@@ -883,14 +874,14 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       return { summary: "cancelled before Claude runtime launch", blocker: "no runtime was launched" };
     }
 
-    // stdin is "ignore", not a pipe: a non-interactive run must be structurally incapable
-    // of blocking on input. That makes `stdin` null, hence the narrower child type here.
+    // Print mode consumes this one finite text input. Explicit EOF prevents an interactive
+    // wait and keeps large task contracts out of Windows' command-line length limit.
     const startedAt = Date.now();
-    let child: ChildProcessByStdio<null, Readable, Readable>;
+    let child: ChildProcessByStdio<Writable, Readable, Readable>;
     try {
       child = spawn(this.command, args, {
         cwd: invocation.workspace_root,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         env: this.options.env ?? process.env,
         windowsHide: true,
         detached: process.platform !== "win32",
@@ -902,6 +893,10 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     }
     let closedAt: number | null = null;
     let launchError: Error | null = null;
+    let inputError: Error | null = null;
+    // A child may close stdin early, or a spawn failure may emit EPIPE. Consume the event
+    // without hiding it; lifecycle/stop evidence still determines safe settlement below.
+    child.stdin.on("error", (error: Error) => { inputError = error; });
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("error", (error) => { launchError = error; });
       child.once("close", (code, signal) => { closedAt = Date.now(); resolve({ code, signal }); });
@@ -1048,6 +1043,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       }
     });
 
+    child.stdin.end(prompt, "utf8");
+
     /* ---- await completion ---- */
 
     let exitCode: number | null = null;
@@ -1123,6 +1120,9 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED,
         runtime_failure: { category: "profile", source: "runtime_code", retryable: false, retry_after_at: null } };
     }
+    if (inputError && !killedForCancel && !killedForDeadline) {
+      telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED };
+    }
     if (!resultFrame && !runtimeErrorFrame && !killedForCancel && !killedForDeadline) telemetry = { ...telemetry,
       runtime_failure: classifyClaudeRuntimeFailure(null, exitCode !== 0 ? stderr.trim() : "") };
     this.lastTelemetry.set(invocation.task_id, telemetry);
@@ -1131,6 +1131,11 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     if (launchError) {
       throw new BridgeError(ErrorCode.ADAPTER_FAILURE, `Claude runtime launch failed: ${(launchError as Error).message}`,
         { task_id: invocation.task_id });
+    }
+
+    if (inputError && !killedForCancel && !killedForDeadline) {
+      throw new BridgeError(ErrorCode.ADAPTER_FAILURE, "Claude runtime did not accept the complete task input",
+        { task_id: invocation.task_id, cause: (inputError as Error).message, runtime_stop_confirmed: true });
     }
 
     /* ---- map the run onto a structured result ---- */

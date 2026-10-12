@@ -72,7 +72,7 @@ export interface SqliteStoreOptions {
   readonly onJournalFallback?: (requested: string, actual: string, reason: string) => void;
 }
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 /** Bound concurrent native-server startup without failing immediately on schema/WAL locks. */
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -180,6 +180,7 @@ CREATE INDEX IF NOT EXISTS idx_status_task ON status_updates(task_id, id);
 
 CREATE TABLE IF NOT EXISTS deliverables (
   task_id TEXT PRIMARY KEY,
+  attempt INTEGER,
   agent   TEXT NOT NULL,
   status  TEXT NOT NULL,
   at      INTEGER NOT NULL,
@@ -189,6 +190,7 @@ CREATE TABLE IF NOT EXISTS deliverables (
 CREATE TABLE IF NOT EXISTS verifications (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id TEXT NOT NULL,
+  attempt INTEGER,
   kind    TEXT NOT NULL,
   passed  INTEGER NOT NULL,
   json    TEXT NOT NULL
@@ -327,6 +329,16 @@ export class SqliteStateStore implements StateStore {
     if (!attemptColumns.has("resumed_from_attempt")) {
       this.db.exec("ALTER TABLE task_attempts ADD COLUMN resumed_from_attempt INTEGER");
     }
+
+    // A pre-v5 check/result cannot be assigned to an attempt from task state or clock
+    // timestamps. Retain its original row/JSON and leave freshness explicitly unknown.
+    for (const table of ["verifications", "deliverables"]) {
+      const fields = this.db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
+      if (!fields.some(row => row["name"] === "attempt")) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN attempt INTEGER`);
+      }
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_verif_task_attempt ON verifications(task_id, attempt, id)");
   }
 
   private configureJournal(
@@ -685,14 +697,14 @@ export class SqliteStateStore implements StateStore {
     return row ? (JSON.parse(row["json"] as string) as StatusUpdate) : undefined;
   }
 
-  insertDeliverable(d: Deliverable): void {
+  insertDeliverable(d: Deliverable, attempt?: number): void {
     this.db
       .prepare(
-        `INSERT INTO deliverables(task_id, agent, status, at, json) VALUES(?,?,?,?,?)
+        `INSERT INTO deliverables(task_id, agent, status, at, json, attempt) VALUES(?,?,?,?,?,?)
          ON CONFLICT(task_id) DO UPDATE SET agent=excluded.agent, status=excluded.status,
-                                            at=excluded.at, json=excluded.json`,
+                                            at=excluded.at, json=excluded.json, attempt=excluded.attempt`,
       )
-      .run(d.task_id, d.agent, d.status, d.at, JSON.stringify(d));
+      .run(d.task_id, d.agent, d.status, d.at, JSON.stringify(d), attempt ?? null);
   }
 
   getDeliverable(task_id: TaskId): Deliverable | undefined {
@@ -702,16 +714,17 @@ export class SqliteStateStore implements StateStore {
     return row ? (JSON.parse(row["json"] as string) as Deliverable) : undefined;
   }
 
-  insertVerification(task_id: TaskId, r: VerificationResult): void {
+  insertVerification(task_id: TaskId, r: VerificationResult, attempt: number): void {
     this.db
-      .prepare("INSERT INTO verifications(task_id, kind, passed, json) VALUES(?,?,?,?)")
-      .run(task_id, r.kind, r.passed ? 1 : 0, JSON.stringify(r));
+      .prepare("INSERT INTO verifications(task_id, kind, passed, json, attempt) VALUES(?,?,?,?,?)")
+      .run(task_id, r.kind, r.passed ? 1 : 0, JSON.stringify(r), attempt);
   }
 
-  listVerifications(task_id: TaskId): VerificationResult[] {
+  listVerifications(task_id: TaskId, attempt?: number | null): VerificationResult[] {
     const rows = this.db
-      .prepare("SELECT json FROM verifications WHERE task_id = ? ORDER BY id ASC")
-      .all(task_id) as Row[];
+      .prepare(`SELECT json FROM verifications WHERE task_id = ?${attempt === undefined ? ""
+        : attempt === null ? " AND attempt IS NULL" : " AND attempt = ?"} ORDER BY id ASC`)
+      .all(...(attempt == null ? [task_id] : [task_id, attempt])) as Row[];
     return rows.map((r) => JSON.parse(r["json"] as string) as VerificationResult);
   }
 

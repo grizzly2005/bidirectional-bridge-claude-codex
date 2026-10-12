@@ -48,18 +48,26 @@ if (has("--fixture-descendant")) {
   await new Promise(() => {});
 }
 
-// Record the invocation so the test can assert the argv contract.
-if (env.FAKE_CLAUDE_ARGV_FILE) {
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(
-    env.FAKE_CLAUDE_ARGV_FILE,
-    JSON.stringify({ args, cwd: process.cwd(), stdinIsTTY: process.stdin.isTTY ?? false }, null, 2),
-  );
-}
-
 if (has("--version")) {
   stdout.write("2.1.222 (Claude Code)\n");
   process.exit(0);
+}
+
+if (env.FAKE_CLAUDE_MODE === "reject-input") {
+  process.stdin.destroy();
+  process.stderr.write("fixture exits before accepting stdin\n");
+  process.exit(2);
+}
+if (env.FAKE_CLAUDE_MODE === "slow-input") await new Promise(resolve => setTimeout(resolve, 10_000));
+
+// Model stand-in: read the finite prompt through the real OS pipe, including explicit EOF.
+let stdin = "";
+process.stdin.setEncoding("utf8");
+for await (const chunk of process.stdin) stdin += chunk;
+if (env.FAKE_CLAUDE_ARGV_FILE) {
+  writeFileSync(env.FAKE_CLAUDE_ARGV_FILE,
+    JSON.stringify({ args, cwd: process.cwd(), stdin, stdinEof: true,
+      stdinIsTTY: process.stdin.isTTY ?? false }, null, 2));
 }
 
 const mode = env.FAKE_CLAUDE_MODE ?? "ok";

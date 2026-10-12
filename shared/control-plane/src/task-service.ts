@@ -420,7 +420,7 @@ export class TaskService {
   readyTasks(): Task[] {
     return this.store
       .listTasks({ state: TaskState.PENDING })
-      .filter((t) => this.checkDependencies(t.task_id).satisfied);
+      .filter((t) => t.owner === null && this.checkDependencies(t.task_id).satisfied);
   }
 
   /* ---------------- transitions ---------------- */

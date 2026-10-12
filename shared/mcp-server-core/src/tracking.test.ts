@@ -70,7 +70,7 @@ describe("tracking verification totals", () => {
   it("falls back for corrupt final JSON and ignores non-object or non-boolean evidence", () => {
     const f = fixture(); const task = working(f); f.cp.deliverables.recordVerification(task.task_id, "codex", success);
     const db = new DatabaseSync(f.databasePath); cleanups.push(() => db.close());
-    db.prepare("INSERT INTO deliverables(task_id,agent,status,at,json) VALUES(?,'codex','PARTIAL',1000,?)").run(task.task_id, "{broken");
+    db.prepare("INSERT INTO deliverables(task_id,agent,status,at,json,attempt) VALUES(?,'codex','PARTIAL',1000,?,0)").run(task.task_id, "{broken");
     expect(f.tracking.reader.snapshot(task.run_id).tasks[0]?.verification).toEqual({ passed: 1, failed: 0 });
     db.prepare("UPDATE deliverables SET json=? WHERE task_id=?").run(JSON.stringify({ verification_results: [null, "PRIVATE_CORRUPT_VALUE", 3,
       { passed: true }, { passed: false }, { passed: 1 }] }), task.task_id);
@@ -184,7 +184,7 @@ describe("read-only tracking and authority", () => {
     db.prepare("UPDATE tasks SET attempt=1,owner='claude' WHERE task_id=?").run(child.task_id);
     db.prepare("INSERT INTO task_executions VALUES(?,?,?,?)").run(child.task_id, "claude", "QUARANTINED", JSON.stringify({ generation: "PRIVATE_GENERATION", executor_pid: 9999, runtime_stop_confirmed: false, cancel_requested_at: 1001 }));
     db.prepare("INSERT INTO attempt_telemetry VALUES(?,?,?,?,?)").run(child.task_id, 0, root.run_id, "claude", JSON.stringify({ input_tokens: 0, output_tokens: null, attempt_wall_duration_ms: 5, runtime_failure: { category: "auth", source: "PRIVATE_OAUTH_SESSION" }, PRIVATE_PROMPT: "secret" }));
-    db.prepare("INSERT INTO deliverables VALUES(?,?,?,?,?)").run(child.task_id, "claude", "COMPLETE", 1001, '{"summary":"PRIVATE_PROMPT"}');
+    db.prepare("INSERT INTO deliverables(task_id,agent,status,at,json,attempt) VALUES(?,?,?,?,?,1)").run(child.task_id, "claude", "COMPLETE", 1001, '{"summary":"PRIVATE_PROMPT"}');
     const before = db.prepare("SELECT * FROM events ORDER BY event_id").all();
     const snapshot = f.tracking.open({ run_id: root.run_id });
     expect(JSON.stringify(snapshot)).not.toMatch(/PRIVATE_|sk-secret|C:\\\\private|execution_handle|generation|executor_pid|scope|spec_json/u);
