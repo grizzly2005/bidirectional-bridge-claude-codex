@@ -17,6 +17,9 @@ The current checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-
 See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
 opt-in delegation tracking, downloads and verification.
 
+This experimental branch also contains the [web-audit MVP and bridge reliability fixes](docs/web-audit-experimental.md).
+Its schema-v5 state must use a separate database from the schema-v4 release.
+
 ## Table of contents
 
 - [What problem it solves](#what-problem-it-solves)

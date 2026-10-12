@@ -17,6 +17,7 @@ export default defineConfig({
      */
     alias: {
       "@bridge/protocol": at("./shared/protocol/src/index.ts"),
+      "@bridge/web-audit": at("./shared/web-audit/src/index.ts"),
       "@bridge/control-plane": at("./shared/control-plane/src/index.ts"),
       "@bridge/mcp-server-core": at("./shared/mcp-server-core/src/index.ts"),
       "@bridge/claude-side": at("./claude/claude-side/src/index.ts"),

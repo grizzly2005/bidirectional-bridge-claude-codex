@@ -26,12 +26,16 @@ __pycache__/
 .claude/skills/*
 !.claude/skills/using-bridge/
 !.claude/skills/using-bridge/**
+!.claude/skills/bridge-web-audit/
+!.claude/skills/bridge-web-audit/**
 .codex/*
 !.codex/config.toml
 !.codex/skills/
 .codex/skills/*
 !.codex/skills/using-bridge/
 !.codex/skills/using-bridge/**
+!.codex/skills/bridge-web-audit/
+!.codex/skills/bridge-web-audit/**
 
 # Logs and temporary workspaces
 *.log

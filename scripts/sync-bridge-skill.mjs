@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = join(root, "skills", "using-bridge");
-const mirrors = [".codex", ".claude", ".agents"].map((client) => join(root, client, "skills", "using-bridge"));
+const skillNames = ["using-bridge", "bridge-web-audit"];
 const write = process.argv.slice(2).includes("--write");
 if (process.argv.slice(2).some((arg) => !["--check", "--write"].includes(arg))) {
   throw new Error("Usage: node scripts/sync-bridge-skill.mjs [--check|--write]");
@@ -20,8 +19,13 @@ function files(folder, prefix = "") {
   }).sort();
 }
 
-const canonical = files(source);
 let mismatches = 0;
+let totalFiles = 0;
+for (const skillName of skillNames) {
+const source = join(root, "skills", skillName);
+const mirrors = [".codex", ".claude", ".agents"].map(client => join(root, client, "skills", skillName));
+const canonical = files(source);
+totalFiles += canonical.length;
 for (const mirror of mirrors) {
   if (write) mkdirSync(mirror, { recursive: true });
   for (const relative of canonical) {
@@ -38,12 +42,13 @@ for (const mirror of mirrors) {
       mismatches++;
     }
   }
-  for (const relative of files(mirror)) {
+  for (const relative of existsSync(mirror) ? files(mirror) : []) {
     if (!canonical.includes(relative)) {
       process.stderr.write(`Unexpected mirror file preserved: ${join(mirror, relative).slice(root.length + 1)}\n`);
       mismatches++;
     }
   }
 }
-process.stdout.write(`${canonical.length} canonical files, ${mirrors.length} mirrors, ${mismatches} differences\n`);
+}
+process.stdout.write(`${totalFiles} canonical files in ${skillNames.length} skills, 3 client mirrors each, ${mismatches} differences\n`);
 process.exitCode = mismatches === 0 ? 0 : 1;
