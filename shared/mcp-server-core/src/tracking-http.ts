@@ -1,5 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
+import { lstatSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import { TrackingError } from "./tracking-reader.js";
@@ -73,12 +75,64 @@ export class TrackingHttpServer {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+export interface TrackingLauncher { command: string; args: string[]; cwd: string }
+
+/** The observer only ever displays its own loopback page; any other target is refused. */
+function loopbackTarget(url: string): string {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new TrackingError("BROWSER_OPEN_FAILED"); }
+  if (parsed.protocol !== "http:" || !LOOPBACK_HOSTS.has(parsed.hostname) || parsed.username || parsed.password) {
+    throw new TrackingError("BROWSER_OPEN_FAILED");
+  }
+  return parsed.href;
+}
+
+/** lstat, not stat: a launcher replaced by a link is not the trusted system binary. */
+function systemFile(path: string): boolean {
+  try { return isAbsolute(path) && lstatSync(path).isFile(); } catch { return false; }
+}
+
+/** System locations from the inherited trusted environment; path shape is not an ownership proof. */
+function launcherDirectories(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+  // Posix separators stay literal: the candidate set must not depend on the host running the check.
+  if (platform !== "win32") return platform === "darwin" ? ["/usr/bin"] : ["/usr/bin", "/bin"];
+  const roots = [env["SystemRoot"], env["windir"], "C:\\Windows"]
+    .filter((root): root is string => typeof root === "string" && /^[a-zA-Z]:[\\/](?![\\/])/u.test(root));
+  // join normalizes traversal segments; the regex already rejected relative and UNC roots.
+  return [...new Set(roots.map(root => join(root, "System32")))];
+}
+
+/**
+ * Resolve an absolute launcher installed in a system directory. Windows resolves a bare
+ * executable from the working directory first and every platform searches a caller-controlled
+ * PATH, so a repository checkout could otherwise supply the "browser".
+ */
+export function resolveTrackingLauncher(url: string, options: {
+  platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; isSystemFile?: (path: string) => boolean;
+} = {}): TrackingLauncher {
+  const platform = options.platform ?? process.platform;
+  const isSystemFile = options.isSystemFile ?? systemFile;
+  const target = loopbackTarget(url);
+  for (const directory of launcherDirectories(platform, options.env ?? process.env)) {
+    if (platform === "win32") {
+      const command = join(directory, "rundll32.exe");
+      // url.dll carries the protocol handler itself; a missing one only fails after spawning.
+      if (!isSystemFile(command) || !isSystemFile(join(directory, "url.dll"))) continue;
+      // cwd is that same system directory, so the legacy CWD-first DLL search cannot be hijacked.
+      return { command, args: ["url.dll,FileProtocolHandler", target], cwd: directory };
+    }
+    const command = `${directory}/${platform === "darwin" ? "open" : "xdg-open"}`;
+    if (isSystemFile(command)) return { command, args: [target], cwd: directory };
+  }
+  throw new TrackingError("BROWSER_UNAVAILABLE");
+}
+
 /** Explicit browser display requested by the caller; no shell or model data interpolation. */
 export async function openTrackingBrowser(url: string): Promise<void> {
-  const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+  const launcher = resolveTrackingLauncher(url);
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+    const child = spawn(launcher.command, launcher.args, { cwd: launcher.cwd, shell: false, stdio: "ignore", windowsHide: true });
     child.once("error", () => reject(new TrackingError("BROWSER_OPEN_FAILED")));
     // Some launchers stay alive with their browser. Opening must not block delegation.
     child.once("spawn", () => { child.unref(); resolve(); });

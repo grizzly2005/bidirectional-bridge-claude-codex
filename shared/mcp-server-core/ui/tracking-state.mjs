@@ -121,6 +121,8 @@ export function normalizeSnapshot(value) {
     schema_version: 1, workspace_ref: id(value.workspace_ref),
     workspace_label: cleanLabel(value.workspace_label, "Espace de travail", 80),
     view_id: id(value.view_id), run_id: id(value.run_id), snapshot_event_id: value.snapshot_event_id,
+    // null, never a default: a view pinned by the server must not be displayed as following.
+    follow_current: typeof value.follow_current === "boolean" ? value.follow_current : null,
     next_cursor: cursor(value.next_cursor), has_more: value.has_more === true,
     observed_at: timestamp(value.observed_at), stale_after_ms: Math.min(60_000, Math.max(1000, count(value.stale_after_ms, 6000))),
     tasks, attempts, links: [...uniqueLinks.values()],
@@ -145,6 +147,12 @@ export function mergeSnapshot(previous, incoming, { allowRunChange = false, allo
   if (previous.run_id === next.run_id && next.snapshot_event_id === previous.snapshot_event_id
     && next.observed_at < previous.observed_at) return previous;
   return next;
+}
+
+// The server owns the follow mode: a view opened on an explicit run stays pinned, and only a
+// response that does not expose the mode keeps the caller's assumption.
+export function resolveFollowMode(snapshot, fallback = true) {
+  return typeof snapshot?.follow_current === "boolean" ? snapshot.follow_current : fallback;
 }
 
 export function chooseSelection(tasks, selectedId) {

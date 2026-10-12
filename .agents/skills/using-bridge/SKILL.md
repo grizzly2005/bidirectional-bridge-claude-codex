@@ -121,6 +121,11 @@ Preserve the root `run_id`, set `parent_task_id` to the root task, and set child
 
 For substantial audits or reports, keep `summary` concise, publish the complete detail as a durable report artifact (inline when size permits), and reference its artifact id in the deliverable. Real checks count only in canonical `verification_results`; `verification_performed` is derived and prose claims are not evidence.
 
+For longer children, narrow the scope to the finite turn budget and reserve a few turns for
+the deliverable. Ask for explicit structured checkpoints when interruption would lose useful
+findings; see [contracts.md](references/contracts.md). A checkpoint preserves progress and
+real evidence, but cannot turn a runtime limit into `COMPLETE`. Resume the same child/session.
+
 Read [contracts.md](references/contracts.md) when constructing an unfamiliar payload or validating a worker result.
 
 ## Respect ownership and leases

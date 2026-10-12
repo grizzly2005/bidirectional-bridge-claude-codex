@@ -21,6 +21,7 @@ const numeric = z.number().nonnegative().nullable();
 const observation = z.object({ status: z.enum(["PENDING", "COMPLETE", "INCOMPLETE", "REJECTED", "LEGACY_UNKNOWN"]), accepted: z.boolean(), strict_required: z.boolean(), category: z.string().nullable() }).nullable();
 const snapshotShape = {
   schema_version: z.literal(1), workspace_ref: z.string(), workspace_label: z.string(), view_id: viewId, run_id: runId.nullable(),
+  follow_current: z.boolean(),
   snapshot_event_id: z.number().int().nonnegative(), next_cursor: cursor.nullable(), has_more: z.boolean(), observed_at: z.number(), stale_after_ms: z.number(), truncated: z.boolean(),
   tasks: z.array(z.object({ task_id: z.string(), run_id: z.string(), parent_task_id: z.string().nullable(), delegation_depth: z.number(), owner: z.string().nullable(), title: z.string(), state: z.string(), business_status: z.string().nullable(), execution_phase: z.string().nullable(), runtime_stop_confirmed: z.boolean().nullable(), cancel_requested: z.boolean(), attempt: z.number(), observation, created_at: numeric, updated_at: numeric, verification: z.object({ passed: z.number(), failed: z.number() }) })),
   attempts: z.array(z.object({ task_id: z.string(), attempt: numeric, agent: z.string().nullable(), resumed_from_attempt: numeric, started_at: numeric, ended_at: numeric, outcome: z.string().nullable(), failure_category: z.enum(["quota", "auth", "transient", "profile", "contract", "turn_limit", "unknown"]).nullable(), observation, telemetry: z.record(numeric).nullable() })),
@@ -28,7 +29,7 @@ const snapshotShape = {
 };
 const historyShape = { schema_version: z.literal(1), workspace_ref: z.string(), items: z.array(z.object({ run_id: z.string(), root_task_id: z.string(), title: z.string(), created_at: numeric, updated_at: numeric, task_count: numeric, active_count: numeric })), next_page_token: cursor.nullable(), has_more: z.boolean() };
 const openShape = { schema_version: z.literal(1), workspace_ref: z.string(), workspace_label: z.string(), view_id: viewId,
-  run_id: runId.nullable(), task_count: z.number().int(), attempt_count: z.number().int(), truncated: z.boolean() };
+  run_id: runId.nullable(), follow_current: z.boolean(), task_count: z.number().int(), attempt_count: z.number().int(), truncated: z.boolean() };
 
 /** The only HTTP operations. Open, workspace paths, caller identity and execution are absent. */
 export function callTrackingOperation(tracking: TrackingCoordinator, name: string, args: Record<string, unknown>): unknown {
@@ -67,9 +68,10 @@ export function registerTracking(server: McpServer, tracking: TrackingCoordinato
           const snapshot = result as ReturnType<TrackingCoordinator["open"]>;
           // _meta is UI-only on Apps hosts: a large graph must not inflate model context.
           meta = { tracking_snapshot: snapshot };
+          // A host without MCP Apps mounts the view from this projection: it must carry the follow mode too.
           result = { schema_version: 1, workspace_ref: snapshot.workspace_ref, workspace_label: snapshot.workspace_label,
-            view_id: snapshot.view_id, run_id: snapshot.run_id, task_count: snapshot.tasks.length,
-            attempt_count: snapshot.attempts.length, truncated: snapshot.truncated };
+            view_id: snapshot.view_id, run_id: snapshot.run_id, follow_current: snapshot.follow_current,
+            task_count: snapshot.tasks.length, attempt_count: snapshot.attempts.length, truncated: snapshot.truncated };
           if (parsed.display === "browser") {
             try { await openTrackingBrowser(await browser.url(snapshot.view_id)); }
             catch (err) { meta["browser_error"] = err instanceof TrackingError ? err.code : "BROWSER_UNAVAILABLE"; }

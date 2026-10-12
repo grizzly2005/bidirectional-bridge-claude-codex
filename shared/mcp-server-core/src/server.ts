@@ -143,6 +143,7 @@ export class BridgeMcpServer {
     try {
       await this.server.close();
     } finally {
+      await this.orchestrator.shutdown();
       await this.trackingBrowser.close();
       this.tracking.close();
       if (this.ownsControlPlane) this.cp.close();

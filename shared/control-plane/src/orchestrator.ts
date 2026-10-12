@@ -94,8 +94,36 @@ export class Orchestrator {
   private readonly activeRecoveries = new Map<string, ActiveRecovery>();
   private readonly activeDelegations = new Map<string, Promise<DelegationOutcome>>();
   private readonly operations: DelegationOperations;
+  private readonly activeInvocations = new Map<string, { controller: AbortController; stopPolling: () => void }>();
+  private stopping = false;
+  private shutdownPromise?: Promise<void>;
 
   constructor(private readonly cp: ControlPlane) { this.operations = new DelegationOperations(cp); }
+
+  /** Drain only work owned by this orchestrator before its store is closed. */
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.stopping = true;
+    if (!this.cp.isClosed) {
+      for (const taskId of new Set([...this.activeDelegations.keys(), ...this.activeRecoveries.keys()])) {
+        const task = this.cp.tasks.get(taskId);
+        this.cp.executions.requestCancel(taskId, task.created_by);
+      }
+    }
+    for (const active of this.activeInvocations.values()) {
+      active.stopPolling();
+      active.controller.abort();
+    }
+    this.shutdownPromise = Promise.allSettled([
+      ...this.activeDelegations.values(),
+      ...[...this.activeRecoveries.values()].map(active => active.promise),
+    ]).then(() => undefined);
+    return this.shutdownPromise;
+  }
+
+  private assertRunning(): void {
+    if (this.stopping || this.cp.isClosed) throw new BridgeError(ErrorCode.TASK_CANCELLED, "Orchestrator is shutting down");
+  }
 
   /**
    * Delegate one bounded task and wait for its outcome.
@@ -105,6 +133,7 @@ export class Orchestrator {
    * blocker and the caller decides what to do, which keeps agent-to-agent traffic finite.
    */
   async delegate(request: DelegationRequest, options: DelegateOptions = {}): Promise<DelegationOutcome> {
+    this.assertRunning();
     if (request.total_deadline_ms !== undefined && (
       !Number.isInteger(request.total_deadline_ms) || request.total_deadline_ms < 1_000
       || request.total_deadline_ms > 86_400_000
@@ -172,7 +201,12 @@ export class Orchestrator {
 
         const runtimeFailure = this.cp.attempts.queryTelemetry({ task_id: task.task_id, attempt, limit: 1 })[0]?.runtime_failure
           ?? lastError.details["runtime_failure"] as AttemptTelemetry["runtime_failure"];
-        const canRetry = lastError.code !== ErrorCode.SCOPE_CONFLICT
+        const execution = this.cp.store.getExecution(task.task_id);
+        if (execution?.runtime_stop_confirmed === true &&
+            (execution.cancel_requested_at !== null || this.cp.tasks.get(task.task_id).state === TaskState.CANCELLED)) {
+          lastError = new BridgeError(ErrorCode.TASK_CANCELLED, "Cancellation takes precedence over retry", { runtime_stop_confirmed: true });
+        }
+        const canRetry = !this.stopping && lastError.code !== ErrorCode.SCOPE_CONFLICT
           && attempt + 1 < maxAttempts && lastError.retryable
           && this.cp.store.getExecution(task.task_id)?.runtime_stop_confirmed === true
           && !["quota", "auth", "profile", "contract", "turn_limit"].includes(
@@ -183,20 +217,22 @@ export class Orchestrator {
 
         // Reset for another go. A non-FAILED task (e.g. left BLOCKED) is failed first so
         // `retry` has a legal predecessor state.
-        const current = this.cp.tasks.get(task.task_id);
-        if (current.state !== TaskState.FAILED && current.owner === request.to) {
-          try {
-            this.cp.tasks.transition({
-              task_id: task.task_id,
-              agent: request.to,
-              to: TaskState.FAILED,
-              reason: `attempt ${attempt} failed: ${lastError.code}`,
+        try {
+          this.cp.store.transaction(() => {
+            const current = this.cp.tasks.get(task.task_id);
+            if (current.state === TaskState.CANCELLED || this.cp.store.getExecution(task.task_id)?.cancel_requested_at != null) {
+              throw new BridgeError(ErrorCode.TASK_CANCELLED, "Cancelled before retry", { runtime_stop_confirmed: true });
+            }
+            if (current.state !== TaskState.FAILED) this.cp.tasks.transition({
+              task_id: task.task_id, agent: request.to, to: TaskState.FAILED,
+              reason: `attempt ${attempt} failed: ${lastError!.code}`,
             });
-          } catch {
-            /* already terminal; retry below will surface the real problem */
-          }
+            this.cp.tasks.retry(task.task_id, request.from, maxAttempts);
+          });
+        } catch (retryError) {
+          lastError = BridgeError.from(retryError);
+          break; // Every terminal path still freezes the durable delegation outcome.
         }
-        this.cp.tasks.retry(task.task_id, request.from, maxAttempts);
       }
     }
 
@@ -333,9 +369,16 @@ export class Orchestrator {
     controller.signal.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(0, invocation.deadline_at - this.cp.clock.now()));
     const cancellation = setInterval(() => {
-      const current = this.cp.store.getExecution(task.task_id);
-      if (current?.generation === execution.generation && current.cancel_requested_at !== null) controller.abort();
+      try {
+        if (this.cp.isClosed || this.stopping) { clearInterval(cancellation); controller.abort(); return; }
+        const current = this.cp.store.getExecution(task.task_id);
+        if (current?.generation === execution.generation && current.cancel_requested_at !== null) controller.abort();
+      } catch {
+        clearInterval(cancellation);
+        controller.abort(); // A read failure is not positive runtime stop evidence.
+      }
     }, 25);
+    this.activeInvocations.set(execution.generation, { controller, stopPolling: () => clearInterval(cancellation) });
     try {
       const runtime = adapter.invoke(invocation, context);
       void runtime.then(() => { settled = true; }, () => { settled = true; });
@@ -356,6 +399,7 @@ export class Orchestrator {
       runtimeEndedAt = settled ? this.cp.clock.now() : null;
     } finally {
       clearTimeout(timer); clearInterval(cancellation);
+      this.activeInvocations.delete(execution.generation);
       if (stopTimer) clearTimeout(stopTimer);
       controller.signal.removeEventListener("abort", onAbort);
     }
@@ -433,6 +477,7 @@ export class Orchestrator {
    * bounded and occurs after the write lock has been released.
    */
   async resumeTask(request: ResumeTaskRequest): Promise<ResumeTaskOutcome> {
+    this.assertRunning();
     return this.resumeAuthorizedTask(request, "owner");
   }
 
@@ -444,6 +489,7 @@ export class Orchestrator {
   async resumeDelegatedTask(
     request: ResumeDelegatedTaskRequest,
   ): Promise<ResumeTaskOutcome> {
+    this.assertRunning();
     return this.resumeAuthorizedTask(request, "delegated_manager");
   }
 
@@ -454,7 +500,12 @@ export class Orchestrator {
     if (!Number.isInteger(wait_ms) || wait_ms < 0 || wait_ms > 30_000) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Cancellation wait must be 0..30000 ms");
     this.cp.store.transaction(() => {
       const task = this.cp.tasks.get(task_id);
-      this.authorizeRecoveryIdentity(task, { task_id, requested_by }, task.owner === requested_by ? "owner" : "delegated_manager");
+      const operation = this.cp.store.firstDelegationOperation(task_id);
+      const flatCreator = task.parent_task_id === null && task.created_by === requested_by
+        && operation?.caller === requested_by && operation.request.from === requested_by
+        && operation.request.to === task.owner && !operation.request.parent_task_id;
+      // A frozen delegation proves cancellation authority only. Recovery rights do not change.
+      if (!flatCreator) this.authorizeRecoveryIdentity(task, { task_id, requested_by }, task.owner === requested_by ? "owner" : "delegated_manager");
       if (isTerminal(task.state)) return;
       const prior = this.cp.store.getExecution(task_id);
       if (prior?.cancel_requested_at === null) this.cp.store.appendEvent({ type: EventType.CANCELLATION_REQUESTED,
@@ -493,6 +544,7 @@ export class Orchestrator {
 
   /** Explicitly continue preparation on the same task; no runtime attempt was consumed. */
   async continueTask(task_id: string, requested_by: AgentId, idempotency_key: string): Promise<DelegationOutcome> {
+    this.assertRunning();
     const operation = this.cp.store.transaction(() => {
       const task = this.cp.tasks.get(task_id);
       this.authorizeRecoveryIdentity(task, { task_id, requested_by }, task.owner === requested_by ? "owner" : "delegated_manager");

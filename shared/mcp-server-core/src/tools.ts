@@ -485,7 +485,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     },
   },
   {
-    name: "bridge_cancel_task", title: "Cancel an owned task or direct delegated child",
+    name: "bridge_cancel_task", title: "Cancel an owned task or proven delegation",
     description: "Request a durable cancellation, stop only this invocation and report positive runtime stop evidence. Unconfirmed stops retain their scope in quarantine.",
     inputShape: { task_id: z.string(), wait_ms: z.number().int().min(0).max(30_000).default(6000), ...agentArg },
     handler: (args, ctx) => ctx.orchestrator.cancelTask(args["task_id"] as string, who(args, ctx), args["wait_ms"] as number ?? 6000),

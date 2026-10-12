@@ -41,6 +41,7 @@ import {
   isOpusFamilyModel,
   normalizeClaudeUsage,
   parseStructuredOutput,
+  parseClaudeCheckpoint,
   type BuildRunnerTelemetryInput,
 } from "./claude-code-runner.js";
 
@@ -954,7 +955,10 @@ describe("telemetry from a real Claude Code stream", () => {
     expect(t.termination_kind).toBe(AttemptTerminationKind.COMPLETED);
     expect(t.process_exit_code).toBe(0);
     // The prompt is measured, not carried: bytes of the contract the runtime received.
-    expect(t.prompt_bytes).toBe(Buffer.byteLength(buildPrompt(invocation, false), "utf8"));
+    const { args } = readArgv();
+    const transmittedPrompt = args[args.indexOf("-p") + 1]!;
+    expect(t.prompt_bytes).toBe(Buffer.byteLength(transmittedPrompt, "utf8"));
+    expect(Number(/Turn ceiling: (\d+)/u.exec(transmittedPrompt)?.[1])).toBe(Number(args[args.indexOf("--max-turns") + 1]));
   });
 
   it("times the run from the process, not from the model's account of it", async () => {
@@ -1051,7 +1055,7 @@ describe("telemetry from a real Claude Code stream", () => {
     expect(telemetry[0]!.termination_kind).toBe(AttemptTerminationKind.COMPLETED);
     // A resumed run is prompted differently, and the byte count must reflect that.
     expect(telemetry[0]!.prompt_bytes).toBe(
-      Buffer.byteLength(buildPrompt(invocation, true), "utf8"),
+      Buffer.byteLength(readArgv().args[readArgv().args.indexOf("-p") + 1]!, "utf8"),
     );
   });
 
@@ -1080,6 +1084,41 @@ describe("runtime health", () => {
     const r = new ClaudeCodeRunner({ command: "definitely-not-a-real-binary-xyz" });
     const health = await r.probe();
     expect(health.ok).toBe(false);
+  });
+});
+
+describe("bounded structured checkpoints", () => {
+  it("preserves explicit progress and real evidence on max_turns while staying PARTIAL", async () => {
+    const outcome = await delegate("checkpoint");
+    expect(outcome.deliverable?.status).toBe("PARTIAL");
+    expect(outcome.deliverable?.summary).toContain("bounded review progress");
+    expect(outcome.deliverable?.verification_results).toHaveLength(1);
+    expect(cp.deliverables.listVerifications(outcome.task_id)).toHaveLength(1);
+    const artifacts = cp.artifacts.list(outcome.task_id);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.name).toBe("claude-checkpoint-1.json");
+    const checkpoint = await cp.artifacts.read(artifacts[0]!.artifact_id);
+    expect(JSON.stringify(checkpoint)).not.toContain("ordinary assistant prose");
+    expect(cp.tasks.get(outcome.task_id).state).toBe("BLOCKED");
+  });
+  it("discards checkpoints containing obvious credentials", async () => {
+    const outcome = await delegate("checkpoint-secret");
+    expect(outcome.deliverable?.status).toBe("PARTIAL");
+    expect(cp.artifacts.list(outcome.task_id)).toEqual([]);
+    expect(cp.deliverables.listVerifications(outcome.task_id)).toEqual([]);
+  });
+  it("rejects non-checkpoint prose, unknown fields, oversize text and session identifiers", () => {
+    const checkpoint = { schema_version: 1, summary: "bounded", verification_results: [], remaining_risks: [] };
+    expect(parseClaudeCheckpoint("ordinary assistant prose")).toBeNull();
+    expect(parseClaudeCheckpoint(JSON.stringify({ bridge_checkpoint: { ...checkpoint, transcript: "private" } }))).toBeNull();
+    expect(parseClaudeCheckpoint(JSON.stringify({ bridge_checkpoint: { ...checkpoint, summary: "s".repeat(2001) } }))).toBeNull();
+    expect(parseClaudeCheckpoint(JSON.stringify({ bridge_checkpoint: { ...checkpoint, summary: "private-session-fixture" } }), ["private-session-fixture"])).toBeNull();
+  });
+  it("refuses contradictory verification output instead of dropping it", async () => {
+    const outcome = await delegate("contradictory");
+    expect(outcome.deliverable?.status).not.toBe("COMPLETE");
+    expect(outcome.error?.code).toBe("INVALID_ARGUMENT");
+    expect(cp.tasks.get(outcome.task_id).state).toBe("FAILED");
   });
 });
 

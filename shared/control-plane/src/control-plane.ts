@@ -40,6 +40,7 @@ export interface ControlPlaneOptions {
 }
 
 export class ControlPlane {
+  private closed = false;
   readonly store: StateStore;
   readonly clock: Clock;
   readonly tasks: TaskService;
@@ -160,8 +161,12 @@ export class ControlPlane {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.store.close();
   }
+
+  get isClosed(): boolean { return this.closed; }
 }
 
 export interface ControlPlaneSnapshot {

@@ -1,7 +1,7 @@
 import {
   ArtifactKind,
   DeliverableStatus,
-  VerificationKind,
+  validateVerificationResult,
   VerificationResultSchema,
   assertValid,
   invalidArgument,
@@ -227,20 +227,7 @@ function normalizeRepoRelativePath(value: string, label: string): string {
 }
 
 function validateVerification(result: VerificationResult): VerificationResult {
-  if (result.exit_code !== null && result.passed !== (result.exit_code === 0)) {
-    throw invalidArgument("verification passed flag contradicts exit_code", {
-      command: result.command,
-      passed: result.passed,
-      exit_code: result.exit_code,
-    });
-  }
-  if (result.kind !== VerificationKind.MANUAL && result.exit_code === null) {
-    throw invalidArgument("command-based verification requires an exit_code", {
-      command: result.command,
-      kind: result.kind,
-    });
-  }
-  return result;
+  return validateVerificationResult(result);
 }
 
 /** Parse, schema-check, and enforce write-scope safety on a Codex final response. */

@@ -92,12 +92,20 @@ export class TrackingReader {
       const rows = db.prepare(`SELECT t.task_id,t.run_id,t.parent_task_id,t.delegation_depth,t.state,t.owner,t.created_at,t.updated_at,t.attempt,
         d.status AS business_status,x.phase,CASE WHEN length(x.json)<=64000 THEN x.json END AS execution_json,
         CASE WHEN length(o.json)<=64000 THEN o.json END AS observation_json,
-        (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=1) AS passed,
-        (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=0) AS failed
+        CASE WHEN json_type(CASE WHEN json_valid(d.json) THEN d.json ELSE '{}' END,'$.verification_results')='array'
+          THEN (SELECT COUNT(*) FROM json_each(d.json,'$.verification_results') v
+            WHERE CASE WHEN v.type='object' THEN json_type(v.value,'$.passed')='true' ELSE 0 END)
+          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=1) END AS passed,
+        CASE WHEN json_type(CASE WHEN json_valid(d.json) THEN d.json ELSE '{}' END,'$.verification_results')='array'
+          THEN (SELECT COUNT(*) FROM json_each(d.json,'$.verification_results') v
+            WHERE CASE WHEN v.type='object' THEN json_type(v.value,'$.passed')='false' ELSE 0 END)
+          ELSE (SELECT COUNT(*) FROM verifications v WHERE v.task_id=t.task_id AND v.passed=0) END AS failed
         FROM tasks t LEFT JOIN deliverables d ON d.task_id=t.task_id LEFT JOIN task_executions x ON x.task_id=t.task_id
         LEFT JOIN attempt_observations o ON o.task_id=t.task_id AND o.attempt=t.attempt
         WHERE t.run_id=? ORDER BY t.delegation_depth,t.created_at,t.task_id LIMIT ?`).all(runId, TRACKING_NODE_LIMIT + 1) as Row[];
       const selected = rows.slice(0, TRACKING_NODE_LIMIT);
+      // Final evidence already merges recorded checks by (kind, command). Count that canonical
+      // result when present; SQL returns only totals, never private commands or deliverable JSON.
       const tasks = selected.map(t => {
         const execution = json(t["execution_json"]);
         return { task_id: id(t["task_id"]), run_id: id(t["run_id"]), parent_task_id: t["parent_task_id"] === null ? null : id(t["parent_task_id"]),

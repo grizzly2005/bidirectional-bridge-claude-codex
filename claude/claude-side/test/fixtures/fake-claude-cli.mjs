@@ -134,7 +134,9 @@ if (mode === "tree" || mode === "orphan") {
     summary: "v22",
   };
   const verificationResults =
-    mode === "mixed"
+    mode === "contradictory"
+      ? [{ ...passingVerification, passed: true, exit_code: 1 }]
+      : mode === "mixed"
       ? [
           passingVerification,
           { kind: "test", command: "npm test", passed: false, exit_code: 1, summary: "1 failed" },
@@ -180,6 +182,14 @@ if (mode === "tree" || mode === "orphan") {
           "```",
         ].join("\n");
 
+  if (mode.startsWith("checkpoint")) {
+    emit({ type: "assistant", message: { role: "assistant", model: reportedModel,
+      content: [{ type: "text", text: "ordinary assistant prose must not be archived" }] } });
+    const checkpoint = { schema_version: 1, summary: "bounded review progress", verification_results: [passingVerification], remaining_risks: ["final review pending"] };
+    if (mode === "checkpoint-secret") checkpoint.summary = "Bearer " + "A".repeat(24);
+    emit({ type: "assistant", message: { role: "assistant", model: reportedModel,
+      content: [{ type: "text", text: JSON.stringify({ bridge_checkpoint: checkpoint }) }] } });
+  }
   emit({
     type: "assistant",
     message: {
@@ -204,7 +214,7 @@ if (mode === "tree" || mode === "orphan") {
       result: contract,
       type: "result",
     });
-  } else if (mode === "maxturns") {
+  } else if (mode === "maxturns" || mode.startsWith("checkpoint")) {
     emit({
       is_error: false,
       duration_api_ms: 2412,

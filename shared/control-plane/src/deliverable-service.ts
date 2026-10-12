@@ -16,6 +16,7 @@ import {
   EventType,
   TaskState,
   assertValid,
+  validateVerificationResult,
   type AgentId,
   type Deliverable,
   type TaskId,
@@ -44,6 +45,7 @@ export class DeliverableService {
 
   /** Record evidence that a check ran. Callers must pass a real exit code. */
   recordVerification(task_id: TaskId, agent: AgentId, result: VerificationResult): void {
+    validateVerificationResult(result);
     this.store.transaction(() => {
       const task = this.tasks.get(task_id);
       if (task.owner !== agent) {
@@ -98,6 +100,7 @@ export class DeliverableService {
       // Merge any evidence recorded during the run with what the deliverable carries.
       const recorded = this.store.listVerifications(deliverable.task_id);
       const evidence = mergeEvidence(recorded, deliverable.verification_results);
+      evidence.forEach(validateVerificationResult);
 
       if (deliverable.status === DeliverableStatus.COMPLETE) {
         // Order matters: report a *failing* check before an absent one. Both conditions

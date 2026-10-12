@@ -29,6 +29,21 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerProcessClient", () => {
+  it.each(["null", "array", "notification"])("contains malformed %s stdout frames without fabricating stop proof", async bad => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, `--bad-frame=${bad}`], stop_timeout_ms: 100 });
+    clients.push(client);
+    const error = await client.start(request(new AbortController().signal)).then(() => null, error => error);
+    expect(error).toMatchObject({ code: "RUNTIME_STOP_UNCONFIRMED", details: { original_code: "ADAPTER_FAILURE", runtime_stop_confirmed: false } });
+    expect(JSON.stringify(error)).not.toContain("SENSITIVE_FRAME_MARKER");
+    await expect(client.start(request(new AbortController().signal))).rejects.toMatchObject({ code: "ADAPTER_FAILURE" });
+  });
+
+  it("allows a turn to outlive the RPC acknowledgement timeout", async () => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, "--delayed-turn"], request_timeout_ms: 75 });
+    clients.push(client);
+    const result = await client.start({ ...request(new AbortController().signal), timeout_ms: 1000 });
+    expect(result.content).toContain("fixture complete");
+  });
   it("does not let one caller abort another caller's shared model-catalog preflight", async () => {
     const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture, "--slow-catalog"] });
     clients.push(client); await client.probe();

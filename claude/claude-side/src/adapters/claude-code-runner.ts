@@ -55,6 +55,9 @@ import {
   MIN_TASK_MAX_TURNS,
   TaskState,
   TelemetryCostSemantics,
+  VerificationResultSchema,
+  assertValid,
+  validateVerificationResult,
   type AttemptTelemetryUpdate,
   type ArtifactId,
   type InvocationContext,
@@ -406,7 +409,8 @@ export function toTelemetryUpdate(t: ClaudeRunnerTelemetry): AttemptTelemetryUpd
  * receive the same contract the control plane will judge the deliverable against, or the
  * verification gate rejects work the agent thought it had finished.
  */
-export function buildPrompt(invocation: TaskInvocation, resuming: boolean): string {
+export function buildPrompt(invocation: TaskInvocation, resuming: boolean,
+  maxTurns = invocation.spec.max_turns ?? DEFAULT_TASK_MAX_TURNS): string {
   const { spec } = invocation;
   const lines: string[] = [];
 
@@ -439,11 +443,16 @@ export function buildPrompt(invocation: TaskInvocation, resuming: boolean): stri
     "If the task cannot be completed within this scope, stop and report a blocker.",
     "",
     "## Rules",
+    `- Turn ceiling: ${validatedMaxTurns(maxTurns, "Claude prompt max_turns")}. Reserve the last few turns for the deliverable.`,
     "- Do not ask interactive questions; you will receive no answer.",
     "- Only claim a verification passed if you actually ran the command and saw its exit code.",
     "- If you cannot finish, report what you did and set a blocker rather than guessing.",
     "- For a substantial audit or report, put the detailed report before the final JSON block.",
     "  Keep the JSON summary concise; the bridge preserves long final output as report artifacts.",
+    "- For longer work, publish up to four intermediate checkpoints as a separate fenced JSON message:",
+    '  {"bridge_checkpoint":{"schema_version":1,"summary":"bounded progress and findings","verification_results":[],"remaining_risks":[]}}',
+    "  Checkpoints are progress only. Use exact commands and exit codes; do not include output logs,",
+    "  prompts, transcripts, credentials or runtime session identifiers. Only explicit checkpoints are saved.",
     "",
     "## Required final output",
     "End your final message with a fenced JSON block in exactly this shape:",
@@ -520,7 +529,7 @@ function sanitizeVerifications(input: unknown): VerificationResult[] {
     if (typeof v["passed"] !== "boolean") continue;
     if (!(v["exit_code"] === null || Number.isInteger(v["exit_code"]))) continue;
     if (typeof v["summary"] !== "string" || v["summary"].length > 4_000) continue;
-    out.push({
+    out.push(validateVerificationResult({
       kind: v["kind"] as VerificationResult["kind"],
       command: v["command"],
       passed: v["passed"],
@@ -532,9 +541,44 @@ function sanitizeVerifications(input: unknown): VerificationResult[] {
       ...(typeof v["output_excerpt"] === "string" && v["output_excerpt"].length <= 20_000
         ? { output_excerpt: v["output_excerpt"] }
         : {}),
-    });
+    }));
   }
   return out;
+}
+
+interface ClaudeCheckpoint {
+  readonly schema_version: 1;
+  readonly summary: string;
+  readonly verification_results: readonly VerificationResult[];
+  readonly remaining_risks: readonly string[];
+}
+
+/** An opt-in operational projection, never an automatic archive of assistant messages. */
+export function parseClaudeCheckpoint(text: string, handles: readonly string[] = []): ClaudeCheckpoint | null {
+  if (Buffer.byteLength(text, "utf8") > 16_000) return null;
+  const trimmed = text.trim();
+  const fenced = /^```json\s*\n([\s\S]*?)\n```$/u.exec(trimmed);
+  try {
+    const envelope = JSON.parse(fenced?.[1] ?? trimmed) as Record<string, unknown>;
+    assertValid(envelope, { type: "object", required: ["bridge_checkpoint"], additionalProperties: false,
+      properties: { bridge_checkpoint: { type: "object", additionalProperties: false,
+        required: ["schema_version", "summary", "verification_results", "remaining_risks"], properties: {
+          schema_version: { const: 1 }, summary: { type: "string", minLength: 1, maxLength: 2000 },
+          verification_results: { type: "array", maxItems: 8, items: { ...VerificationResultSchema, properties: {
+            kind: VerificationResultSchema.properties!["kind"]!, command: VerificationResultSchema.properties!["command"]!,
+            passed: { type: "boolean" }, exit_code: VerificationResultSchema.properties!["exit_code"]!,
+            summary: { type: "string", maxLength: 1000 },
+          } } },
+          remaining_risks: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 } },
+        } } } }, "ClaudeCheckpoint");
+    const encoded = JSON.stringify(envelope);
+    // Guardrails against accidental publication, not a claim of exhaustive secret detection.
+    if (handles.some(handle => handle.length > 0 && encoded.includes(handle)) ||
+        /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|Bearer\s+[A-Za-z0-9._-]{16,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.)|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu.test(encoded)) return null;
+    const checkpoint = envelope["bridge_checkpoint"] as unknown as ClaudeCheckpoint;
+    checkpoint.verification_results.forEach(validateVerificationResult);
+    return checkpoint;
+  } catch { return null; }
 }
 
 function boundedSummary(value: string | undefined): string {
@@ -824,7 +868,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const resuming = this.options.allowResume !== false && Boolean(invocation.previous_execution_handle);
     let prompt: string;
     let args: string[];
-    try { prompt = buildPrompt(invocation, resuming); args = this.buildArgs(invocation, prompt); }
+    try { prompt = buildPrompt(invocation, resuming, invocation.spec.max_turns ?? this.defaultMaxTurns); args = this.buildArgs(invocation, prompt); }
     catch (error) { await ctx.reportRuntimeState?.("stopped"); throw error; }
 
     if (ctx.signal.aborted || invocation.deadline_at <= Date.now()) {
@@ -876,6 +920,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     let runtimeVersion: string | null = null;
     let model: string | null = null;
     let firstOutputAt: number | null = null;
+    let lastCheckpoint: ClaudeCheckpoint | null = null;
+    const checkpointArtifacts: ArtifactId[] = [];
 
     /* ---- bounding: deadline and cancellation both terminate the child ---- */
     let stopPromise: Promise<boolean> | null = null;
@@ -951,6 +997,23 @@ export class ClaudeCodeRunner implements ClaudeRunner {
         if (model === null) {
           const m = (frame as { message?: { model?: unknown } }).message?.model;
           if (typeof m === "string" && m) model = m;
+        }
+      }
+
+      if (frame.type === "assistant" && checkpointArtifacts.length < 4 && !ctx.signal.aborted &&
+          (model === null || isOpusFamilyModel(model))) {
+        const content = (frame as { message?: { content?: unknown } }).message?.content;
+        if (Array.isArray(content)) for (const item of content) {
+          if (checkpointArtifacts.length >= 4 || !item || item.type !== "text" || typeof item.text !== "string") continue;
+          const checkpoint = parseClaudeCheckpoint(item.text, [sessionId ?? "", invocation.previous_execution_handle ?? ""]);
+          if (!checkpoint) continue;
+          try {
+            const id = await ctx.publishArtifact({ kind: "report", name: `claude-checkpoint-${checkpointArtifacts.length + 1}.json`,
+              media_type: "application/json", inline: JSON.stringify(checkpoint),
+              metadata: { source: "claude-structured-checkpoint", schema_version: 1, attempt: invocation.attempt, sequence: checkpointArtifacts.length + 1 } });
+            checkpointArtifacts.push(id); lastCheckpoint = checkpoint;
+            for (const evidence of checkpoint.verification_results) await ctx.recordVerification(evidence);
+          } catch { this.log("[claude-runner] checkpoint publication failed; final result remains required"); }
         }
       }
 
@@ -1071,9 +1134,15 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     }
 
     /* ---- map the run onto a structured result ---- */
+    const savedCheckpoint = lastCheckpoint as ClaudeCheckpoint | null;
+    const checkpointResult = {
+      artifacts: checkpointArtifacts,
+      verification_results: savedCheckpoint?.verification_results ?? [],
+    };
 
     if (killedForCancel) {
       return {
+        ...checkpointResult,
         summary: "cancelled before the Claude runtime finished",
         blocker: "run cancelled by the coordination bridge",
         telemetry: telemetryUpdate,
@@ -1083,6 +1152,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
 
     if (killedForDeadline) {
       return {
+        ...checkpointResult,
         summary: `Claude runtime exceeded its ${invocation.spec.deadline_ms ?? "allotted"}ms budget and was terminated`,
         blocker: "deadline exceeded before the task produced a result",
         remaining_risks: ["partial edits may exist inside the leased scope"],
@@ -1104,6 +1174,9 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     }
 
     if (!resultFrame) {
+      if (savedCheckpoint) return { ...checkpointResult, summary: boundedSummary(savedCheckpoint.summary),
+        blocker: "Claude exited before a final result; preserved checkpoint is partial",
+        remaining_risks: [...savedCheckpoint.remaining_risks, "no final runtime result"], telemetry: telemetryUpdate };
       // No result frame means the CLI failed before it could produce one — a missing
       // binary, a bad flag, an auth failure at startup. Surface stderr, which is where the
       // reason lives; retryability is decided by the code we pick here.
@@ -1127,9 +1200,11 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       // than a throw: the attempt is real, the session id is persisted, and a retry can
       // resume it. Reporting COMPLETE here would be a false claim of success.
       return {
-        summary: `Claude runtime reported an error: ${text || frame.terminal_reason || telemetry.runtime_failure.category}`,
-        blocker: text || frame.terminal_reason || "claude runtime error",
+        ...checkpointResult,
+        summary: boundedSummary(savedCheckpoint?.summary ?? `Claude runtime reported an error: ${text || frame.terminal_reason || telemetry.runtime_failure.category}`),
+        blocker: boundedSummary(frame.terminal_reason || telemetry.runtime_failure.category),
         remaining_risks: [
+          ...(savedCheckpoint?.remaining_risks ?? []),
           frame.terminal_reason === "api_error"
             ? "the Claude runtime could not reach the API or is not authenticated"
             : "the runtime terminated abnormally",
@@ -1142,7 +1217,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const verifications = sanitizeVerifications(
       structured?.verification_results ?? structured?.verifications,
     );
-    const artifacts = await preserveDetailedReport(text, ctx);
+    const artifacts = [...checkpointArtifacts, ...await preserveDetailedReport(text, ctx)];
 
     await ctx.report({
       state: TaskState.VERIFYING,

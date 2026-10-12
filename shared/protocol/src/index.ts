@@ -12,6 +12,7 @@ export * from "./scope.js";
 export * from "./validate.js";
 export * from "./schemas.js";
 export * from "./adapter.js";
+export * from "./verification.js";
 
 /** Bumped when a breaking change lands in the wire contract. */
 export const PROTOCOL_VERSION = "1.3.0";

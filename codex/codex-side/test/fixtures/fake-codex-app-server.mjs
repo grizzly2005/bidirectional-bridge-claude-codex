@@ -30,7 +30,7 @@ const resultText = () =>
     recommended_next_action: "none",
   });
 
-createInterface({ input: process.stdin }).on("line", (line) => {
+createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
   if (message.id === undefined) return;
@@ -90,6 +90,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: message.id,
       result: { turn: { id: turnId, items: [], status: "inProgress" } },
     });
+    const badFrame = process.argv.find(arg => arg.startsWith("--bad-frame="))?.slice("--bad-frame=".length);
+    if (badFrame) {
+      send(badFrame === "null" ? null : badFrame === "array" ? []
+        : { method: "turn/completed", params: { threadId, turn: { id: turnId }, private: "SENSITIVE_FRAME_MARKER" } });
+      return;
+    }
+    if (process.argv.includes("--delayed-turn")) await new Promise(resolve => setTimeout(resolve, 180));
     if (failedWithoutUsage) {
       send({
         jsonrpc: "2.0",

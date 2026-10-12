@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  cleanLabel, normalizeSnapshot, normalizeObservation, mergeSnapshot, chooseSelection, getFreshness,
+  cleanLabel, normalizeSnapshot, normalizeObservation, mergeSnapshot, chooseSelection, getFreshness, resolveFollowMode,
   shouldAnimate, describeTask, attemptLabel, knownMetric, graphLayout, normalizeHistory, mergeHistory, pollingDelay, hasActiveTasks,
 } from "./tracking-state.mjs";
 import { textElement } from "./tracking-ui.mjs";
@@ -135,6 +135,26 @@ describe("tracking projection and display boundaries", () => {
     expect(mergeSnapshot(current, snapshot({ snapshot_event_id: 6 })).tasks).toHaveLength(1);
     expect(mergeSnapshot(current, snapshot({ run_id: "run-2", tasks: [task({ run_id: "run-2" })] }))).toBe(current);
     expect(mergeSnapshot(current, snapshot({ run_id: "run-2", tasks: [task({ run_id: "run-2" })] }), { allowRunChange: true }).run_id).toBe("run-2");
+  });
+
+  it("keeps the server's follow mode instead of assuming the view follows the current session", () => {
+    expect(normalizeSnapshot(snapshot({ follow_current: false })).follow_current).toBe(false);
+    expect(normalizeSnapshot(snapshot({ follow_current: true })).follow_current).toBe(true);
+    // An absent or non-boolean mode must stay unknown so the reader keeps its own assumption.
+    expect(normalizeSnapshot(snapshot()).follow_current).toBeNull();
+    expect(normalizeSnapshot(snapshot({ follow_current: "yes" })).follow_current).toBeNull();
+    // Initial mount: a pinned view shows the "return to the current session" control from the start.
+    expect(resolveFollowMode(normalizeSnapshot(snapshot({ follow_current: false })), true)).toBe(false);
+    expect(resolveFollowMode(normalizeSnapshot(snapshot({ follow_current: true })), false)).toBe(true);
+    expect(resolveFollowMode(null)).toBe(true);
+    expect(resolveFollowMode(normalizeSnapshot(snapshot()), false)).toBe(false);
+    // Returning to the current session, then the next root of that same view.
+    const pinned = normalizeSnapshot(snapshot({ follow_current: false }));
+    const restored = normalizeSnapshot(snapshot({ follow_current: true, snapshot_event_id: 6, observed_at: 1100 }));
+    expect(resolveFollowMode(restored, resolveFollowMode(pinned))).toBe(true);
+    const nextRun = snapshot({ follow_current: true, run_id: "run-2", snapshot_event_id: 7, observed_at: 1200, tasks: [task({ run_id: "run-2" })] });
+    expect(mergeSnapshot(pinned, nextRun, { allowRunChange: resolveFollowMode(pinned) })).toBe(pinned);
+    expect(mergeSnapshot(restored, nextRun, { allowRunChange: resolveFollowMode(restored) }).run_id).toBe("run-2");
   });
 
   it("preserves selection on state refresh and returns to the root when a task disappears", () => {
