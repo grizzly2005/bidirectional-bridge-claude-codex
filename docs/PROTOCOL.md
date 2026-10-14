@@ -136,6 +136,15 @@ Two gates are enforced, not advisory:
   The low-level host API has a separately recorded `allowUnverified` waiver option;
   ordinary MCP/delegated completion does not expose that override.
 
+For Claude final output, contradictory `passed` / `exit_code` values or a missing exit code
+on a non-manual check preserve a rejected candidate report with indexed `INVALID_ARGUMENT`
+diagnostics. The accepted deliverable is `PARTIAL` and the task is `BLOCKED`; rejected checks
+never become canonical verification evidence, even when other checks pass. Explicit eligible
+recovery continues the same task/session and receives the candidate reports as hash-verified
+file snapshots alongside the original inputs. A repeated contradiction stays blocked.
+This does not broaden eligibility for historical `FAILED` tasks, relax completion gates,
+or add a new MCP tool or persistence migration.
+
 ## Write scopes and leases
 
 A scope is a set of repo-relative glob patterns (`*`, `**`, `?`). Overlap is computed by

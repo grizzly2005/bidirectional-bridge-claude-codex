@@ -1177,11 +1177,129 @@ describe("bounded structured checkpoints", () => {
     expect(parseClaudeCheckpoint(JSON.stringify({ bridge_checkpoint: { ...checkpoint, summary: "s".repeat(2001) } }))).toBeNull();
     expect(parseClaudeCheckpoint(JSON.stringify({ bridge_checkpoint: { ...checkpoint, summary: "private-session-fixture" } }), ["private-session-fixture"])).toBeNull();
   });
-  it("refuses contradictory verification output instead of dropping it", async () => {
+  it("preserves rejected verification output as PARTIAL without accepting contradictory evidence", async () => {
     const outcome = await delegate("contradictory");
-    expect(outcome.deliverable?.status).not.toBe("COMPLETE");
-    expect(outcome.error?.code).toBe("INVALID_ARGUMENT");
-    expect(cp.tasks.get(outcome.task_id).state).toBe("FAILED");
+    expect(outcome.deliverable?.status).toBe("PARTIAL");
+    expect(outcome.deliverable?.summary).toContain("runtime info collected");
+    expect(outcome.deliverable?.changed_scope).toEqual(["docs/fixture-fix.md"]);
+    expect(outcome.deliverable?.verification_results).toEqual([]);
+    expect(cp.deliverables.listVerifications(outcome.task_id)).toEqual([]);
+    expect(cp.tasks.get(outcome.task_id).state).toBe("BLOCKED");
+    const artifacts = cp.artifacts.list(outcome.task_id);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.name).toBe("claude-rejected-result.json");
+    const rejected = JSON.parse(artifacts[0]!.inline!);
+    expect(rejected.validation_status).toBe("rejected");
+    expect(rejected.diagnostics).toEqual([{
+      index: 0, code: "INVALID_ARGUMENT", message: "verification passed flag contradicts exit_code",
+      retryable: false, details: { command: "node --version", passed: true, exit_code: 1 },
+    }]);
+    expect(parseStructuredOutput(rejected.candidate)?.verification_results?.[0])
+      .toMatchObject({ passed: true, exit_code: 1 });
+    expect(outcome.deliverable?.artifacts).toContain(artifacts[0]!.artifact_id);
+    expect(cp.leases.listLive()).toEqual([]);
+  });
+
+  it.each([
+    ["contradictory-zero", false, 0, "verification passed flag contradicts exit_code"],
+    ["contradictory-null", true, null, "command-based verification requires an exit_code"],
+    ["contradictory-mixed", true, 1, "verification passed flag contradicts exit_code"],
+  ])("blocks %s even when other evidence passes", async (mode, passed, exit_code, message) => {
+    const outcome = await delegate(mode);
+    expect(outcome.deliverable?.status).toBe("PARTIAL");
+    expect(cp.tasks.get(outcome.task_id).state).toBe("BLOCKED");
+    expect(outcome.deliverable?.verification_results).toHaveLength(mode === "contradictory-mixed" ? 1 : 0);
+    const rejected = JSON.parse(cp.artifacts.list(outcome.task_id)[0]!.inline!);
+    expect(rejected.diagnostics[0]).toMatchObject({ code: "INVALID_ARGUMENT", message,
+      details: { command: "node --version", ...(exit_code !== null ? { passed, exit_code } : { kind: "test" }) } });
+  });
+
+  it("fragments rejected candidates against the registry byte limit without losing the original result", async () => {
+    cp.close();
+    cp = ControlPlane.open({ workspaceRoot: workspace, databasePath: ":memory:",
+      rng: seededRandom(31), inlineArtifactLimitBytes: 1024 });
+    orchestrator = new Orchestrator(cp);
+    const outcome = await delegate("contradictory-large");
+    expect(outcome.deliverable?.status).toBe("PARTIAL");
+    const artifacts = cp.artifacts.list(outcome.task_id);
+    expect(artifacts.length).toBeGreaterThan(1);
+    expect(artifacts.every(a => a.bytes <= 1024 && a.metadata?.["source"] === "claude-rejected-result")).toBe(true);
+    const rejected = JSON.parse(artifacts.map(a => a.inline!).join(""));
+    expect(rejected.candidate).toContain("é😀".repeat(3000));
+    expect(rejected.candidate).toContain("FULL_REPORT_END");
+    expect(parseStructuredOutput(rejected.candidate)?.verification_results?.[0]).toMatchObject({ passed: true, exit_code: 1 });
+  });
+
+  it("resumes the same rejected child and session after a database reopen, with an idempotent correction", async () => {
+    cp.close();
+    const databasePath = join(workspace, "rejection-recovery.sqlite");
+    const open = () => ControlPlane.open({ workspaceRoot: workspace, databasePath, rng: seededRandom(31) });
+    cp = open();
+    orchestrator = new Orchestrator(cp);
+    const parent = cp.tasks.create({ spec: spec({ scope: { paths: ["parent/**"] } }), created_by: "codex" });
+    cp.tasks.claim(parent.task_id, "codex");
+    const input = cp.artifacts.publish({ task_id: parent.task_id, produced_by: "codex", kind: "report",
+      name: "original-input", inline: "original-input-sentinel" });
+    cp.adapters.register(new ClaudeAdapter({ runner: fixtureRunner("contradictory-resume"), agent: "claude" }));
+    const initial = await orchestrator.delegate({ from: "codex", to: "claude", spec: spec(),
+      run_id: parent.run_id, parent_task_id: parent.task_id, delegation_depth: 1,
+      input_artifacts: [input.artifact_id], deadline_ms: 20_000, max_attempts: 1 });
+    expect(initial.deliverable?.status).toBe("PARTIAL");
+    expect(initial.attempts).toBe(1);
+    const before = cp.tasks.get(initial.task_id);
+    const handle = cp.attempts.get(initial.task_id, 0)!.execution_handle;
+    const rejectedIds = initial.deliverable!.artifacts;
+    expect(rejectedIds.length).toBeGreaterThan(1);
+    cp.close();
+    cp = open();
+    orchestrator = new Orchestrator(cp);
+    cp.adapters.register(new ClaudeAdapter({ runner: fixtureRunner("contradictory-resume"), agent: "claude" }));
+    await expect(orchestrator.resumeDelegatedTask({ task_id: initial.task_id, requested_by: "outsider" }))
+      .rejects.toMatchObject({ code: ErrorCode.NOT_OWNER });
+    const request = { task_id: initial.task_id, requested_by: "codex", idempotency_key: "correct-rejected-result" };
+    const resumed = await orchestrator.resumeDelegatedTask(request);
+    expect(resumed.error).toBeNull();
+    expect(resumed.state).toBe("DONE");
+    expect(resumed.deliverable?.status).toBe("COMPLETE");
+    expect(resumed.resumed_from_attempt).toBe(0);
+    const after = cp.tasks.get(initial.task_id);
+    expect(after).toMatchObject({ task_id: before.task_id, run_id: before.run_id,
+      parent_task_id: before.parent_task_id, owner: before.owner, attempt: 1, spec: before.spec });
+    expect(cp.attempts.get(initial.task_id, 1)?.execution_handle).toBe(handle);
+    const { args, stdin } = readArgv();
+    expect(args[args.indexOf("--resume") + 1]).toBe(handle);
+    expect(stdin).toContain("original-input-sentinel");
+    for (const id of rejectedIds) expect(stdin).toContain(id);
+    // Rejected candidates are provided as immutable file snapshots, even after reopen.
+    const records = JSON.parse(stdin.split("These records do not broaden write scope.\n")[1]!.split("\n\n## Write scope")[0]!);
+    const reports = records.filter((record: { metadata?: { source?: string } }) => record.metadata?.source === "claude-rejected-result");
+    expect(reports).toHaveLength(rejectedIds.length);
+    expect(reports.every((record: { path?: string; inline?: string }) => record.path && record.inline === undefined)).toBe(true);
+    const rejected = JSON.parse(reports.map((record: { path: string }) => readFileSync(join(workspace, record.path), "utf8")).join(""));
+    expect(rejected.diagnostics[0].message).toBe("verification passed flag contradicts exit_code");
+    expect(rejected.candidate).toContain("REJECTED_CANDIDATE_LARGE_".repeat(12_000));
+    expect(stdin).not.toContain("REJECTED_CANDIDATE_LARGE_");
+    expect(stdin).toContain("correct the final result using real evidence");
+    expect(cp.deliverables.listVerifications(initial.task_id, 0)).toEqual([]);
+    expect(resumed.deliverable?.verification_results).toHaveLength(1);
+    expect(resumed.deliverable?.verification_results[0]).toMatchObject({ passed: true, exit_code: 0 });
+    for (const id of rejectedIds) expect(cp.artifacts.get(id).metadata?.["source"]).toBe("claude-rejected-result");
+    expect(await orchestrator.resumeDelegatedTask(request)).toEqual(resumed);
+    expect(cp.attempts.list(initial.task_id)).toHaveLength(2);
+    expect(cp.leases.listLive()).toEqual([]);
+  });
+
+  it("keeps a repeated contradiction blocked on the same task instead of approving filtered evidence", async () => {
+    const initial = await delegate("contradictory-mixed");
+    const resumed = await orchestrator.resumeTask({ task_id: initial.task_id, requested_by: "claude",
+      idempotency_key: "still-contradictory" });
+    expect(resumed.task_id).toBe(initial.task_id);
+    expect(resumed.state).toBe("BLOCKED");
+    expect(resumed.deliverable?.status).toBe("PARTIAL");
+    expect(resumed.deliverable?.verification_results).toHaveLength(1);
+    expect(resumed.deliverable?.remaining_risks.join(" ")).toContain("verification passed flag contradicts exit_code");
+    expect(cp.attempts.list(initial.task_id)).toHaveLength(2);
+    expect(cp.leases.listLive()).toEqual([]);
   });
 });
 

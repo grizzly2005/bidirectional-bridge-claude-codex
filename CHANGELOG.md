@@ -11,7 +11,19 @@ explicitly.
 
 ## Unreleased
 
-No changes recorded yet.
+### Fixed
+
+- Preserve Claude final results rejected for inconsistent verification as durable candidate
+  reports with indexed `INVALID_ARGUMENT` diagnostics. Return `PARTIAL` / `BLOCKED`, exclude
+  rejected checks from accepted evidence, and permit explicit correction on the same task
+  and session. Recovery supplies the reports as verified file snapshots without expanding
+  the frozen scope, deadlines or turn ceiling. See
+  [BRIDGE-FIX-20261014-01](docs/pending-release-fixes.md#bridge-fix-20261014-01).
+
+### Documentation
+
+- Keep a [pending release fix register](docs/pending-release-fixes.md) with stable fix IDs,
+  validation commands, evidence limits and release status for subsequent fixes.
 
 ## 0.4.0 — 2026-10-12 (candidate)
 

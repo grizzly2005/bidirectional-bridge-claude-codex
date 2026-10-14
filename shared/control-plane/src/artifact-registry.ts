@@ -164,7 +164,8 @@ export class ArtifactRegistry {
   }
 
   /** Freeze inputs at their published hash; mutable project paths never reach a worker. */
-  resolveForInvocation(ids: readonly ArtifactId[]): Artifact[] {
+  resolveForInvocation(ids: readonly ArtifactId[], snapshotInlineIds: readonly ArtifactId[] = []): Artifact[] {
+    const snapshotInline = new Set(snapshotInlineIds);
     return ids.map(id => {
       const artifact = this.get(id);
       const content = artifact.inline !== undefined ? Buffer.from(artifact.inline, "utf8")
@@ -172,7 +173,7 @@ export class ArtifactRegistry {
       if (content.length !== artifact.bytes || createHash("sha256").update(content).digest("hex") !== artifact.sha256) {
         throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Input artifact no longer matches its published content", { artifact_id: id });
       }
-      if (artifact.inline !== undefined) return artifact;
+      if (artifact.inline !== undefined && !snapshotInline.has(id)) return artifact;
       const path = `.bridge/input-snapshots/${artifact.sha256}`;
       mkdirSync(join(this.workspaceRoot, ".bridge/input-snapshots"), { recursive: true });
       try { writeFileSync(join(this.workspaceRoot, path), content, { flag: "wx", mode: 0o444 }); }
@@ -180,7 +181,10 @@ export class ArtifactRegistry {
       if (createHash("sha256").update(readFileSync(join(this.workspaceRoot, path))).digest("hex") !== artifact.sha256) {
         throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Input snapshot integrity failed");
       }
-      return { ...artifact, path };
+      // The stored artifact remains unchanged. Large recovery reports travel as files
+      // so their complete rejected candidates cannot exhaust the worker prompt budget.
+      const { inline: _inline, ...snapshotArtifact } = artifact;
+      return { ...snapshotArtifact, path };
     });
   }
 

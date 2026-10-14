@@ -43,6 +43,7 @@ incomplete observation. Read the durable state before invoking a runtime again.
 | Completed business, incomplete observation | `bridge_repair_observation` seals the validated stored draft without a model call. | Do not rerun business work or supply invented metrics. |
 | Observation `REJECTED` | Preserve the typed privacy/schema rejection. | Do not export the raw payload or bypass validation. |
 | Validation failure | Correct the payload/result once using existing real evidence. | Do not rerun completed work or invent paths/checks. |
+| Claude final verification rejection | Inspect the `claude-rejected-result` report and its indexed `INVALID_ARGUMENT` diagnostics. The result is `PARTIAL` / `BLOCKED`; request explicit eligible resume on the same task/session to correct it. Recovery provides verified file snapshots and keeps the original inputs/budgets. | Never count rejected checks as evidence or promote a filtered result to `COMPLETE`. Historical `FAILED` eligibility is unchanged. |
 | Failed recovery | Report the same task, new attempt, lineage, and exact reason. | Do not create a sibling task or fresh runtime thread. |
 
 `runtime_failure.source` distinguishes provider code from provider text. A category does

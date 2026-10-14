@@ -421,6 +421,8 @@ export function buildPrompt(invocation: TaskInvocation, resuming: boolean,
     lines.push(
       "You are resuming a previously interrupted task in this same session.",
       "Continue from where you left off; do not restart work that is already done.",
+      "If the inputs include a claude-rejected-result report, inspect its diagnostics and correct the final result using real evidence.",
+      "The preserved candidate is rejected data, not accepted verification. Never invent a passing flag or exit code to resolve a rejection.",
       "",
     );
   }
@@ -523,12 +525,21 @@ export function parseStructuredOutput(text: string): ClaudeStructuredOutput | nu
   return null;
 }
 
-/** Only keep verification entries that carry real evidence of having run. */
-function sanitizeVerifications(input: unknown): VerificationResult[] {
-  if (!Array.isArray(input)) return [];
+interface RejectedVerification {
+  readonly index: number;
+  readonly error: BridgeError;
+}
+
+/** Separate accepted evidence from rejected claims; a rejection must block completion. */
+function sanitizeVerifications(input: unknown): {
+  accepted: VerificationResult[];
+  rejected: RejectedVerification[];
+} {
+  if (!Array.isArray(input)) return { accepted: [], rejected: [] };
   const allowed = new Set(["test", "typecheck", "build", "lint", "static_analysis", "benchmark", "manual"]);
-  const out: VerificationResult[] = [];
-  for (const raw of input) {
+  const accepted: VerificationResult[] = [];
+  const rejected: RejectedVerification[] = [];
+  for (const [index, raw] of input.entries()) {
     if (!raw || typeof raw !== "object") continue;
     const v = raw as Record<string, unknown>;
     if (typeof v["kind"] !== "string" || !allowed.has(v["kind"] as string)) continue;
@@ -536,7 +547,7 @@ function sanitizeVerifications(input: unknown): VerificationResult[] {
     if (typeof v["passed"] !== "boolean") continue;
     if (!(v["exit_code"] === null || Number.isInteger(v["exit_code"]))) continue;
     if (typeof v["summary"] !== "string" || v["summary"].length > 4_000) continue;
-    out.push(validateVerificationResult({
+    const result: VerificationResult = {
       kind: v["kind"] as VerificationResult["kind"],
       command: v["command"],
       passed: v["passed"],
@@ -548,9 +559,14 @@ function sanitizeVerifications(input: unknown): VerificationResult[] {
       ...(typeof v["output_excerpt"] === "string" && v["output_excerpt"].length <= 20_000
         ? { output_excerpt: v["output_excerpt"] }
         : {}),
-    }));
+    };
+    try { accepted.push(validateVerificationResult(result)); }
+    catch (error) {
+      if (!(error instanceof BridgeError) || error.code !== ErrorCode.INVALID_ARGUMENT) throw error;
+      rejected.push({ index, error });
+    }
   }
-  return out;
+  return { accepted, rejected };
 }
 
 interface ClaudeCheckpoint {
@@ -593,26 +609,35 @@ function boundedSummary(value: string | undefined): string {
   return normalized.slice(0, CLAUDE_SUMMARY_MAX_CHARS);
 }
 
-async function preserveDetailedReport(text: string, ctx: InvocationContext): Promise<ArtifactId[]> {
-  if (text.length <= CLAUDE_SUMMARY_MAX_CHARS) return [];
+async function preserveDetailedReport(text: string, ctx: InvocationContext,
+  rejected: readonly RejectedVerification[] = []): Promise<ArtifactId[]> {
+  if (rejected.length === 0 && text.length <= CLAUDE_SUMMARY_MAX_CHARS) return [];
+  // Preserve even a short candidate before returning PARTIAL. This report is never
+  // inserted as verification evidence; it is durable data for explicit same-task repair.
+  if (rejected.length > 0) text = JSON.stringify({
+    schema_version: 1, validation_status: "rejected", candidate: text,
+    diagnostics: rejected.map(({ index, error }) => ({ index, ...error.toJSON() })),
+  }, null, 2);
   const chunks = splitUtf8(text, Math.min(CLAUDE_REPORT_CHUNK_MAX_BYTES,
     ctx.max_inline_artifact_bytes ?? CLAUDE_REPORT_CHUNK_MAX_BYTES));
   const reportSha256 = createHash("sha256").update(text, "utf8").digest("hex");
   const artifacts: ArtifactId[] = [];
+  const prefix = rejected.length > 0 ? "claude-rejected-result" : "claude-report";
+  const extension = rejected.length > 0 ? "json" : "md";
   for (let index = 0; index < chunks.length; index++) {
     const sequence = index + 1;
     const name =
       chunks.length === 1
-        ? "claude-report.md"
-        : `claude-report.part-${String(sequence).padStart(3, "0")}-of-${String(chunks.length).padStart(3, "0")}.md`;
+        ? `${prefix}.${extension}`
+        : `${prefix}.part-${String(sequence).padStart(3, "0")}-of-${String(chunks.length).padStart(3, "0")}.${extension}`;
     artifacts.push(
       await ctx.publishArtifact({
         kind: "report",
         name,
-        media_type: "text/markdown",
+        media_type: rejected.length > 0 ? "application/json" : "text/markdown",
         inline: chunks[index]!,
         metadata: {
-          source: "claude-final-output",
+          source: rejected.length > 0 ? "claude-rejected-result" : "claude-final-output",
           sequence,
           total_chunks: chunks.length,
           complete_report_sha256: reportSha256,
@@ -1229,10 +1254,15 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     }
 
     const structured = parseStructuredOutput(text);
-    const verifications = sanitizeVerifications(
+    const { accepted: verifications, rejected } = sanitizeVerifications(
       structured?.verification_results ?? structured?.verifications,
     );
-    const artifacts = [...checkpointArtifacts, ...await preserveDetailedReport(text, ctx)];
+    const artifacts = [...checkpointArtifacts, ...await preserveDetailedReport(text, ctx, rejected)];
+    const rejectionRisks = rejected.map(({ index, error }) =>
+      `verification_results[${index}] rejected: ${error.code}: ${error.message}; ${JSON.stringify(error.details)}`.slice(0, 2000));
+    const blocker = rejected.length > 0
+      ? `Claude verification rejected: ${rejected[0]!.error.code}: ${rejected[0]!.error.message}`
+      : structured?.blocker ? String(structured.blocker) : undefined;
 
     await ctx.report({
       state: TaskState.VERIFYING,
@@ -1240,8 +1270,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       owned_scope: invocation.spec.scope.paths,
       progress: 1,
       artifacts,
-      blockers: structured?.blocker ? [String(structured.blocker)] : [],
-      next_action: "submit deliverable",
+      blockers: blocker ? [blocker] : [],
+      next_action: rejected.length > 0 ? "preserve PARTIAL and correct the rejected result on the same task" : "submit deliverable",
     });
 
     const result: ClaudeRunResult = {
@@ -1251,11 +1281,12 @@ export class ClaudeCodeRunner implements ClaudeRunner {
         : {}),
       artifacts,
       verification_results: verifications,
-      ...(structured?.remaining_risks ? { remaining_risks: structured.remaining_risks } : {}),
+      remaining_risks: [...rejectionRisks, ...(structured?.remaining_risks ?? []),
+        ...(rejected.length > 0 && structured?.blocker ? [String(structured.blocker)] : [])],
       ...(structured?.recommended_next_action
         ? { recommended_next_action: structured.recommended_next_action }
         : {}),
-      ...(structured?.blocker ? { blocker: String(structured.blocker) } : {}),
+      ...(blocker ? { blocker } : {}),
       commit_or_diff: null,
       telemetry: telemetryUpdate,
     };

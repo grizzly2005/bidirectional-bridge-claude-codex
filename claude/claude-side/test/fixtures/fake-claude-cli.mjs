@@ -142,8 +142,14 @@ if (mode === "tree" || mode === "orphan") {
     summary: "v22",
   };
   const verificationResults =
-    mode === "contradictory"
-      ? [{ ...passingVerification, passed: true, exit_code: 1 }]
+    mode.startsWith("contradictory") && !(mode === "contradictory-resume" && resumeId)
+      ? [
+          ...(mode === "contradictory-mixed" ? [passingVerification] : []),
+          { ...passingVerification,
+            kind: mode === "contradictory-null" ? "test" : passingVerification.kind,
+            passed: mode !== "contradictory-zero",
+            exit_code: mode === "contradictory-zero" ? 0 : mode === "contradictory-null" ? null : 1 },
+        ]
       : mode === "mixed"
       ? [
           passingVerification,
@@ -155,12 +161,14 @@ if (mode === "tree" || mode === "orphan") {
           { kind: "test", passed: true, exit_code: 0, summary: "no command given" },
         ];
   const detailedReport =
-    mode === "large"
+    mode === "large" || mode === "contradictory-large" || (mode === "contradictory-resume" && !resumeId)
       ? [
           "# RELEASE_BLOCKERS",
           "No release blocker found in the deterministic fixture.",
           "# EVIDENCE",
           "AUDIT_EVIDENCE_".repeat(900),
+          ...(mode === "contradictory-large" ? ["é😀".repeat(3000)] : []),
+          ...(mode === "contradictory-resume" ? ["REJECTED_CANDIDATE_LARGE_".repeat(12_000)] : []),
           "FULL_REPORT_END",
           "",
         ].join("\n")
@@ -176,7 +184,7 @@ if (mode === "tree" || mode === "orphan") {
           JSON.stringify(
             {
               summary: `runtime info collected${resumedNote}`,
-              changed_scope: [],
+              changed_scope: mode.startsWith("contradictory") ? ["docs/fixture-fix.md"] : [],
               ...(mode === "summaryonly"
                 ? { verification_performed: ["npm test"] }
                 : { verification_results: verificationResults }),

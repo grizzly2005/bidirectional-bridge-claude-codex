@@ -653,7 +653,12 @@ export class Orchestrator {
   ): Promise<ResumeTaskOutcome> {
     const task = this.cp.tasks.get(request.task_id);
     this.authorizeRecoveryIdentity(task, request, kind);
-    const inputs = this.cp.artifacts.resolveForInvocation(this.recoveryInputArtifactIds(task.task_id));
+    const inputIds = this.recoveryInputArtifactIds(task.task_id);
+    const reportIds = inputIds.filter(id => {
+      const artifact = this.cp.artifacts.get(id);
+      return artifact.task_id === task.task_id && artifact.metadata?.["source"] === "claude-rejected-result";
+    });
+    const inputs = this.cp.artifacts.resolveForInvocation(inputIds, reportIds);
     const prepared = this.prepareRecovery(request, kind);
     if (prepared.replayed) return this.replayRecovery(prepared.reservation);
     return this.executeRecovery(request, prepared.reservation, inputs);
@@ -1157,13 +1162,13 @@ export class Orchestrator {
     return Math.min(perAttempt, totalDeadlineAt - this.cp.clock.now());
   }
 
-  /** Recover the immutable input list recorded when this existing task was delegated. */
+  /** Original immutable inputs plus this task's latest rejected-result reports for repair. */
   private recoveryInputArtifactIds(task_id: string): ArtifactId[] {
     const delegation = this.cp
       .events({ task_id })
       .find((event) => event.type === EventType.DELEGATION_REQUESTED);
-    const raw = delegation?.payload["input_artifacts"];
-    if (raw === undefined) return [];
+    const stored = delegation?.payload["input_artifacts"];
+    const raw = stored === undefined ? [] : stored;
     if (!Array.isArray(raw) || !raw.every((artifactId) => typeof artifactId === "string")) {
       throw new BridgeError(
         ErrorCode.INTERNAL,
@@ -1171,7 +1176,13 @@ export class Orchestrator {
         { task_id },
       );
     }
-    return raw as ArtifactId[];
+    const task = this.cp.tasks.get(task_id);
+    const rejected = (this.cp.deliverables.get(task_id)?.artifacts ?? []).filter(id => {
+      const artifact = this.cp.artifacts.get(id);
+      return artifact.task_id === task_id && artifact.produced_by === task.owner
+        && artifact.metadata?.["source"] === "claude-rejected-result";
+    });
+    return [...new Set([...(raw as ArtifactId[]), ...rejected])];
   }
 
   /** The callbacks handed to an adapter. All of them route through the control plane. */

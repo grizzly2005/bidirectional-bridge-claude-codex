@@ -49,6 +49,12 @@ Every user-visible change is recorded in [CHANGELOG.md](../CHANGELOG.md) under a
 Security. Breaking changes are called out explicitly rather than being implied by a version
 number, because a `0.x` number does not communicate impact on its own.
 
+Record each pending fix in [the fix register](pending-release-fixes.md) with a stable ID,
+the demonstrated trigger, implementation, exact validation commands/exits and evidence limits.
+Link it from `Unreleased`. Subsequent fixes append entries to the same register. Keep entries
+pending until an explicitly requested release ships them; then record the actual version and
+release reference. A locally validated fix does not itself authorize a release or version bump.
+
 ## Release checklist
 
 The release/0.4.0 branch is a versioned candidate. Local certification hashes its public
