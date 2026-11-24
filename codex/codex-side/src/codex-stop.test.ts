@@ -74,7 +74,9 @@ describe("targeted remote stop", () => {
     const pending = client.start({ ...req(controller.signal), on_runtime_state: async state => { states.push(state); } }).catch(e => e);
     await pause(70); controller.abort();
     expect((await pending).code).toBe("RUNTIME_STOP_UNCONFIRMED");
-    await pause(400);
+    // The fixture announces the turn after 350 ms; wait for the late evidence instead of a
+    // fixed sleep, which was too tight on slower Windows runners.
+    for (const until = Date.now() + 5_000; states.at(-1) !== "stopped" && Date.now() < until;) await pause(25);
     expect(readFileSync(log, "utf8")).toContain("stopped:thread_1:turn_1");
     expect(states).toContain("unconfirmed"); expect(states.at(-1)).toBe("stopped");
   });
