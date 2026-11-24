@@ -72,6 +72,7 @@ and notes can remain meaningful only when their tested conditions and epochs are
 ```powershell
 npm run build
 node scripts/test-shared-memory.mjs
+$env:BRIDGE_MEMORY_PEER = "gemini"; node scripts/test-shared-memory.mjs   # Antigravity (caller=gemini) as the second caller
 ```
 
 The test starts a Codex-bound MCP process, publishes a synthetic map with 150 endpoints and

@@ -39,6 +39,8 @@ Package/runtime 0.5.0, wire 1.5.0 (additive), SQLite schema 6 unchanged. See
   (diagnostics unchanged) plus shared contract and model-selection helpers.
 - Delegated workers receive `BRIDGE_DELEGATED_WORKER=1`; the native launcher refuses to
   start under it.
+- Shared working memory is available to Antigravity managers (`caller=gemini`); the
+  restart/concurrency smoke also runs with Gemini as the second caller in CI and release.
 
 ### Changed
 

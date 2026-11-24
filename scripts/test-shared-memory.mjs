@@ -9,6 +9,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The second native caller; CI also runs this with BRIDGE_MEMORY_PEER=gemini (Antigravity).
+const SECOND = process.env.BRIDGE_MEMORY_PEER ?? "claude";
+if (!["claude", "gemini"].includes(SECOND)) throw new Error("BRIDGE_MEMORY_PEER must be claude or gemini");
 const scope = { namespace: "bug-bounty", context_id: "shared-memory-fixture", branch: "experimental", application_version: "fixture-v1", epoch: "fixture-epoch-1" };
 const note = (kind, title, summary, extra = {}) => ({ kind, title, summary, lifecycle: "active", references: [], related_task_ids: [], abandonment: null, ...extra });
 let openedProcesses = 0;
@@ -75,7 +78,7 @@ async function seed(file) {
   } finally { await codex.close(); }
 }
 async function enrich(file, summary = "Claude identified a missing workflow-state prerequisite; obtain an independent actor/state witness before the next comparison.") {
-  const frame = readFrame(file), claude = await peer("claude", frame.db);
+  const frame = readFrame(file), claude = await peer(SECOND, frame.db);
   try {
     const context = (await claude.call("memory_get_context", { scope: frame.scope, max_bytes: 8192 })).value;
     const previous = context.notes.find(row => row.key === "working-summary");
@@ -86,7 +89,7 @@ async function enrich(file, summary = "Claude identified a missing workflow-stat
         expected_revision: 1, task_id: frame.claudeTaskId, idempotency_key: "claude:workflow-prerequisite",
         note: note(previous.kind, previous.title, frame.claudeSummary, { references: previous.references, related_task_ids: previous.related_task_ids }) })).value;
       assert.equal(replayed.change_cursor, frame.claudeChangeCursor); assert.equal(replayed.revision, 2);
-      return { caller: "claude", revision: 2, changeCursor: replayed.change_cursor, referencesPreserved: true,
+      return { caller: SECOND, revision: 2, changeCursor: replayed.change_cursor, referencesPreserved: true,
         idempotentReplay: true, newObservationApplied: false };
     }
     assert.equal(previous.revision, 1); assert.equal(previous.provenance.agent, "codex");
@@ -96,10 +99,10 @@ async function enrich(file, summary = "Claude identified a missing workflow-stat
     const revision = (await claude.call("memory_upsert", { scope: frame.scope, key: previous.key, expected_revision: previous.revision,
       task_id: task.task_id, idempotency_key: "claude:workflow-prerequisite", note: note(previous.kind, previous.title, summary,
         { references: previous.references, related_task_ids: previous.related_task_ids }) })).value;
-    assert.equal(revision.revision, 2); assert.equal(revision.provenance.agent, "claude");
+    assert.equal(revision.revision, 2); assert.equal(revision.provenance.agent, SECOND);
     await claude.finish(task);
     const updated = { ...frame, claudeTaskId: task.task_id, claudeRevision: revision.revision, claudeChangeCursor: revision.change_cursor, claudeSummary: summary };
-    saveFrame(file, updated); return { caller: "claude", revision: revision.revision, changeCursor: revision.change_cursor, referencesPreserved: true };
+    saveFrame(file, updated); return { caller: SECOND, revision: revision.revision, changeCursor: revision.change_cursor, referencesPreserved: true };
   } finally { await claude.close(); }
 }
 async function history(peer, frame) {
@@ -115,23 +118,23 @@ async function resume(file) {
   const frame = readFrame(file), codex = await peer("codex", frame.db);
   try {
     const delta = (await codex.call("memory_get_changes", { scope: frame.scope, change_cursor: frame.snapshotCursor })).value;
-    assert.deepEqual(delta.changes.map(row => [row.key, row.revision, row.provenance.agent]), [["working-summary", 2, "claude"]]);
+    assert.deepEqual(delta.changes.map(row => [row.key, row.revision, row.provenance.agent]), [["working-summary", 2, SECOND]]);
     assert.equal(delta.changes[0].summary, frame.claudeSummary);
     assert.equal(delta.changes[0].references[0].sha256, frame.artifact.sha256);
     assert(delta.changes[0].reference_states.every(row => row.status === "intact"));
     const revisions = (await history(codex, frame)).filter(row => row.key === "working-summary");
-    assert.deepEqual(revisions.map(row => [row.revision, row.provenance.agent]), [[1, "codex"], [2, "claude"]]);
+    assert.deepEqual(revisions.map(row => [row.revision, row.provenance.agent]), [[1, "codex"], [2, SECOND]]);
     const context = (await codex.call("memory_get_context", { scope: frame.scope, max_bytes: 8192 })).value;
     assert(context.notes.find(row => row.key === "abandoned-actor-track").abandonment.reason);
     assert(context.pending_tasks.some(row => row.task_id === frame.pendingTaskId));
     assert.equal((await codex.call("memory_get_context", { scope: { ...frame.scope, epoch: "fixture-epoch-2" } })).value.notes.length, 0);
-    const result = { continuity: "codex-close-claude-close-codex", revision: 2, deltaOnly: true, historyRecovered: true,
+    const result = { continuity: `codex-close-${SECOND}-close-codex`, revision: 2, deltaOnly: true, historyRecovered: true,
       referencesPreserved: true, abandonedReasonPreserved: true, oldEpochExcluded: true, campaignBodyLoadedIntoContext: false };
     saveFrame(join(dirname(file), "restart-result.json"), result); return result;
   } finally { await codex.close(); }
 }
 async function race(file) {
-  const frame = readFrame(file), a = await peer("codex", frame.db), b = await peer("claude", frame.db);
+  const frame = readFrame(file), a = await peer("codex", frame.db), b = await peer(SECOND, frame.db);
   try {
     const ta = await a.create("Race participant Codex"), tb = await b.create("Race participant Claude");
     const value = note("decision", "Concurrent decision", "The current revision must be read before merging.");
