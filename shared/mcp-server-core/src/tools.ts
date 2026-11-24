@@ -547,7 +547,7 @@ export const TOOLS: readonly ToolDefinition[] = [
       kind: z.enum(["file", "diff", "log", "report", "test_result", "json"]).default("report"),
       inline: z.string().optional(),
       path: z.string().optional().describe("Repo-relative path. Mutually exclusive with 'inline'."),
-      metadata: z.record(z.unknown()).optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
       ...agentArg,
     },
     handler: (args, ctx) => {
