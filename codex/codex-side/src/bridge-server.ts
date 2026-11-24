@@ -31,6 +31,7 @@ export interface CodexBridgeServerArgs {
   readonly sandbox: CodexSandbox;
   readonly runtime_transport: "mcp" | "app-server";
   readonly tool_path?: string | null;
+  readonly codex_wsl_executable?: string;
   readonly help: boolean;
 }
 
@@ -67,6 +68,7 @@ export function parseBridgeServerArgs(
   let sandbox: CodexSandbox = "workspace-write";
   let runtimeTransport: "mcp" | "app-server" = "app-server";
   let toolPath: string | null | undefined;
+  let codexWslExecutable: string | undefined;
   let help = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -131,6 +133,10 @@ export function parseBridgeServerArgs(
         toolPath = valueAfter(argv, index, flag);
         index += 1;
         break;
+      case "--codex-wsl-executable":
+        codexWslExecutable = valueAfter(argv, index, flag);
+        index += 1;
+        break;
       case "--no-tool-path":
         if (typeof toolPath === "string") {
           throw new Error("--no-tool-path conflicts with --tool-path");
@@ -146,6 +152,9 @@ export function parseBridgeServerArgs(
     }
   }
 
+  if (codexWslExecutable !== undefined && runtimeTransport !== "app-server") {
+    throw new Error("--codex-wsl-executable requires --runtime-transport app-server");
+  }
   return {
     workspace,
     ...(databasePath ? { database_path: databasePath } : {}),
@@ -156,6 +165,7 @@ export function parseBridgeServerArgs(
     sandbox,
     runtime_transport: runtimeTransport,
     ...(toolPath !== undefined ? { tool_path: toolPath } : {}),
+    ...(codexWslExecutable !== undefined ? { codex_wsl_executable: codexWslExecutable } : {}),
     help,
   };
 }
@@ -174,6 +184,8 @@ export const BRIDGE_SERVER_HELP = `bridge-codex-mcp — coordination MCP server 
                         telemetry-capable path; certified MCP remains available.
   --tool-path           exact PATH exposed to delegated shell commands
   --no-tool-path        disable automatic safe tool-PATH augmentation
+  --codex-wsl-executable absolute Linux Codex executable, explicitly selected for a
+                         Windows WSL UNC workspace (App Server transport only)
 `;
 
 export async function runBridgeServer(
@@ -183,7 +195,9 @@ export async function runBridgeServer(
   const log = runtime.log ?? stderrLog;
   const client =
     runtime.client ??
-    (args.runtime_transport === "app-server" ? new CodexAppServerProcessClient() : undefined);
+    (args.runtime_transport === "app-server" ? new CodexAppServerProcessClient({ cwd: args.workspace,
+      ...(args.codex_wsl_executable !== undefined ? { wsl_executable: args.codex_wsl_executable } : {}),
+    }) : undefined);
   const adapter = new CodexAdapter({
     ...(client ? { client } : {}),
     implementation:

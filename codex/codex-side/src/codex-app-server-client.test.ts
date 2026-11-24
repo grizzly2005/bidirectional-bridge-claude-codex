@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -16,6 +16,7 @@ const currentTimeFixture = resolve(
   "codex/codex-side/test/fixtures/fake-codex-app-server-current-time.mjs",
 );
 const clients: CodexAppServerProcessClient[] = [];
+const temporaryDirectories: string[] = [];
 
 const request = (signal: AbortSignal) => ({
   prompt: "return one fixture result",
@@ -28,6 +29,89 @@ const request = (signal: AbortSignal) => ({
 
 afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map((client) => client.close()));
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe.skipIf(process.platform !== "win32")("Codex Windows WSL session boundary", () => {
+  const workspace = "\\\\wsl.localhost\\Ubuntu\\home\\kali\\worker-test";
+  const runtimeCwd = "/home/kali/worker-test";
+  function setup(extraArgs: string[] = []) {
+    const directory = mkdtempSync(join(tmpdir(), "bridge-wsl-rpc-"));
+    temporaryDirectories.push(directory);
+    const capture = join(directory, "requests.jsonl");
+    const make = () => {
+      const client = new CodexAppServerProcessClient({ cwd: workspace, wsl_executable: "/usr/local/bin/codex",
+        command: process.execPath, args: [fixture, "--linux-platform", `--capture=${capture}`, `--read-cwd=${runtimeCwd}`, ...extraArgs] });
+      clients.push(client);
+      return client;
+    };
+    return { make, messages: () => readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line)) };
+  }
+
+  it.each(["read-only", "workspace-write"] as const)("keeps Linux cwd, roots and %s policy across start and same-thread restart", async sandbox => {
+    const { make, messages } = setup();
+    const first = make();
+    const started = await first.start({ ...request(new AbortController().signal), cwd: workspace, sandbox,
+      config: { sandbox_workspace_write: { writable_roots: [`${workspace}\\output`] } } });
+    await first.close();
+    const second = make();
+    const resumed = await second.reply({ thread_id: started.thread_id, cwd: workspace, sandbox, approval_policy: "never",
+      config: { mcp_servers: { bridge: { enabled: false } } }, prompt: "continue same child", timeout_ms: 2000, signal: new AbortController().signal });
+    expect(resumed.thread_id).toBe(started.thread_id);
+    const wire = messages();
+    for (const message of wire.filter(item => ["config/read", "thread/start", "thread/resume", "turn/start"].includes(item.method))) {
+      expect(message.params.cwd).toBe(runtimeCwd);
+      expect(JSON.stringify(message.params)).not.toContain("wsl.localhost");
+      if (message.method !== "config/read") {
+        expect(message.params.runtimeWorkspaceRoots).toEqual([runtimeCwd]);
+        expect(message.params.approvalPolicy).toBe("never");
+      }
+    }
+    expect(wire.find(item => item.method === "thread/start").params.config.sandbox_workspace_write.writable_roots).toEqual([`${runtimeCwd}/output`]);
+    expect(wire.filter(item => item.method === "turn/start").every(item => item.params.sandboxPolicy.type === (sandbox === "read-only" ? "readOnly" : "workspaceWrite"))).toBe(true);
+    expect(wire.find(item => item.method === "thread/resume").params.config.mcp_servers.bridge.enabled).toBe(false);
+  });
+
+  it("rejects a retained foreign permission root before a turn", async () => {
+    const { make, messages } = setup(["--foreign-root"]);
+    let handles = 0;
+    await expect(make().start({ ...request(new AbortController().signal), cwd: workspace,
+      on_execution_handle: async () => { handles++; } })).rejects.toMatchObject({ code: "RUNTIME_PROFILE_MISMATCH", details: { runtime_stop_confirmed: true } });
+    expect(handles).toBe(0);
+    expect(messages().some(item => item.method === "turn/start")).toBe(false);
+  });
+
+  it("does not relocate a persisted thread from another repository on resume", async () => {
+    const { make, messages } = setup(["--foreign-stored-workspace"]);
+    await expect(make().reply({ thread_id: "previous_thread", cwd: workspace, sandbox: "read-only", approval_policy: "never",
+      prompt: "continue", timeout_ms: 2000, signal: new AbortController().signal })).rejects.toMatchObject({ code: "RUNTIME_PROFILE_MISMATCH" });
+    expect(messages().some(item => item.method === "thread/resume" || item.method === "turn/start")).toBe(false);
+  });
+
+  it("does not create an invalid disabled bridge entry in a separate Linux config", async () => {
+    const { make, messages } = setup(["--without-project-bridge"]);
+    await make().start({ ...request(new AbortController().signal), cwd: workspace, config: {
+      mcp_servers: { bridge: { enabled: false }, peer: { command: "/usr/local/bin/peer" } },
+    } });
+    expect(messages().find(item => item.method === "thread/start").params.config.mcp_servers).toEqual({ peer: { command: "/usr/local/bin/peer" } });
+  });
+
+  it("rejects Windows Codex launched through WSL interop", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bridge-wsl-interop-"));
+    temporaryDirectories.push(directory);
+    const capture = join(directory, "requests.jsonl");
+    const client = new CodexAppServerProcessClient({ cwd: workspace, wsl_executable: "/usr/local/bin/codex",
+      command: process.execPath, args: [fixture, `--capture=${capture}`] });
+    clients.push(client);
+    await expect(client.start({ ...request(new AbortController().signal), cwd: workspace })).rejects.toMatchObject({ code: "RUNTIME_PROFILE_MISMATCH" });
+    expect(readFileSync(capture, "utf8")).not.toContain("thread/start");
+  });
+
+  it("refuses native UNC even when the bootstrap cwd is local", async () => {
+    const client = new CodexAppServerProcessClient({ command: process.execPath, args: [fixture], cwd: process.cwd() });
+    clients.push(client);
+    await expect(client.start({ ...request(new AbortController().signal), cwd: workspace })).rejects.toMatchObject({ code: "RUNTIME_PROFILE_MISMATCH", details: { runtime_stop_confirmed: true } });
+  });
 });
 
 describe("CodexAppServerProcessClient", () => {

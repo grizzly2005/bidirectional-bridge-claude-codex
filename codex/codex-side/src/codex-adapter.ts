@@ -29,6 +29,7 @@ import {
 } from "./codex-mcp-client.js";
 import { CodexAppServerProcessClient } from "./codex-app-server-client.js";
 import { publishCodexArtifact, ArtifactOutputPublicationError } from "./artifact-output.js";
+import { resolveCodexExecutionEnvironment } from "./codex-execution-environment.js";
 import {
   CODEX_DEVELOPER_INSTRUCTIONS,
   buildRepairPrompt,
@@ -327,10 +328,14 @@ export class CodexAdapter implements AgentAdapter {
     this.maxIdempotencyEntries = options.max_idempotency_entries ?? 512;
     this.toolPath =
       options.tool_path === undefined
-        ? buildDefaultCodexToolPath()
+        ? this.client.usesWsl ? undefined : buildDefaultCodexToolPath()
         : options.tool_path === null
           ? undefined
           : options.tool_path;
+    if (this.client.usesWsl && this.toolPath !== undefined &&
+        (!this.toolPath.startsWith("/") || /[\\;\x00-\x1f]/u.test(this.toolPath))) {
+      throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "A Codex WSL tool_path must be a Linux PATH; the Windows host PATH cannot be used");
+    }
     if (!Number.isInteger(this.maxStructureRepairs) || this.maxStructureRepairs < 0) {
       throw new BridgeError(
         ErrorCode.INVALID_ARGUMENT,
@@ -533,6 +538,7 @@ export class CodexAdapter implements AgentAdapter {
         next_action: "Collect Codex result and validate the structured deliverable",
       });
 
+      if (!this.client.usesWsl) resolveCodexExecutionEnvironment({ cwd: invocation.workspace_root });
       runtimeLaunched = true;
       const first = await this.startOrResume(invocation, transportContext, controller.signal);
       runtimeStopConfirmed = true;
@@ -674,9 +680,12 @@ export class CodexAdapter implements AgentAdapter {
         // an injected transport omits lifecycle callbacks. Only its settled reply ends it.
         await ctx.reportRuntimeState?.("running");
         response = await this.client.reply({
-          ...(isReadOnlyScope(invocation.spec.scope) ? { sandbox: "read-only" as const } : {}),
           thread_id: response.thread_id,
           cwd: invocation.workspace_root,
+          approval_policy: this.approvalPolicy,
+          // A reserved no-write task stays read-only on every continuation (WSL included).
+          sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
+          config: this.workerConfig(),
           prompt: buildRepairPrompt(error),
           timeout_ms: this.remainingMs(invocation),
           signal,
@@ -716,9 +725,11 @@ export class CodexAdapter implements AgentAdapter {
       try {
         let handleSaved = false;
         const resumed = await this.client.reply({
-          ...(isReadOnlyScope(invocation.spec.scope) ? { sandbox: "read-only" as const } : {}),
           thread_id: previousHandle,
           cwd: invocation.workspace_root,
+          approval_policy: this.approvalPolicy,
+          sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
+          config: this.workerConfig(),
           prompt: buildResumePrompt(invocation),
           timeout_ms: this.remainingMs(invocation),
           signal,
@@ -734,7 +745,7 @@ export class CodexAdapter implements AgentAdapter {
         if (!handleSaved) await ctx.saveExecutionHandle(resumed.thread_id);
         return resumed;
       } catch (error) {
-        if (!this.isExplicitlyStaleHandle(error) || invocation.resume_required === true) {
+        if (this.client.usesWsl || !this.isExplicitlyStaleHandle(error) || invocation.resume_required === true) {
           throw error;
         }
         await ctx.report({
@@ -764,10 +775,7 @@ export class CodexAdapter implements AgentAdapter {
       approval_policy: this.approvalPolicy,
       sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
       ...(this.model !== undefined ? { model: this.model } : {}),
-      config: {
-        mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
-        shell_environment_policy: buildCodexShellEnvironmentPolicy(this.toolPath),
-      },
+      config: this.workerConfig(),
       developer_instructions: CODEX_DEVELOPER_INSTRUCTIONS,
       timeout_ms: this.remainingMs(invocation),
       signal,
@@ -782,6 +790,13 @@ export class CodexAdapter implements AgentAdapter {
     // that first observable moment, before parsing or registering any result data.
     if (!handleSaved) await ctx.saveExecutionHandle(started.thread_id);
     return started;
+  }
+
+  private workerConfig(): Record<string, unknown> {
+    return {
+      mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
+      shell_environment_policy: buildCodexShellEnvironmentPolicy(this.toolPath),
+    };
   }
 
   private isExplicitlyStaleHandle(error: unknown): boolean {

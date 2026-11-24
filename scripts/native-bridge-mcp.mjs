@@ -17,6 +17,8 @@ export const NATIVE_BRIDGE_HELP = `native-bridge-mcp — project-scoped neutral 
   --delegation      allow | deny (required; enforced server-side)
   --workspace       project root (default: current working directory)
   --db              shared SQLite path (default: <workspace>/.bridge/bridge.db)
+  --codex-wsl-executable  absolute Linux Codex executable; explicitly use the WSL
+                         distribution named by a Windows WSL UNC workspace
   --help            write this help to stderr and exit
 `;
 
@@ -33,6 +35,7 @@ export function parseNativeBridgeArgs(argv, cwd = process.cwd()) {
   let delegation;
   let workspaceRaw;
   let databaseRaw;
+  let codexWslExecutable;
   let help = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -52,6 +55,10 @@ export function parseNativeBridgeArgs(argv, cwd = process.cwd()) {
         break;
       case "--db":
         databaseRaw = valueAfter(argv, index, flag);
+        index += 1;
+        break;
+      case "--codex-wsl-executable":
+        codexWslExecutable = valueAfter(argv, index, flag);
         index += 1;
         break;
       case "--help":
@@ -82,6 +89,7 @@ export function parseNativeBridgeArgs(argv, cwd = process.cwd()) {
     delegation,
     workspace,
     databasePath,
+    ...(codexWslExecutable !== undefined ? { codexWslExecutable } : {}),
     help,
   };
 }
@@ -112,6 +120,9 @@ export async function runNativeBridge(args) {
   ]);
 
   const log = (line) => core.stderrLog(`[bridge-native:${args.caller}] ${line}`);
+  const codexExecution = codexSide.resolveCodexExecutionEnvironment({ cwd: args.workspace,
+    ...(args.codexWslExecutable !== undefined ? { wsl_executable: args.codexWslExecutable } : {}),
+  });
   const claudeRunner = new claudeSide.ClaudeCodeRunner({
     permissionMode: "acceptEdits",
     // ClaudeCodeRunner owns the protected opus/high profile and conservative bounded
@@ -131,7 +142,9 @@ export async function runNativeBridge(args) {
   // The certified official-codex-cli-mcp adapter remains available in codex-side; native
   // bridge composition selects App Server only so delegated attempts keep benchmark-grade
   // telemetry rather than introducing a second telemetry subsystem.
-  const codexClient = new codexSide.CodexAppServerProcessClient({ cwd: args.workspace });
+  const codexClient = new codexSide.CodexAppServerProcessClient({ cwd: args.workspace,
+    ...(args.codexWslExecutable !== undefined ? { wsl_executable: args.codexWslExecutable } : {}),
+  });
   const codexAdapter = new codexSide.CodexAdapter({
     client: codexClient,
     implementation: "official-codex-app-server",
@@ -152,6 +165,7 @@ export async function runNativeBridge(args) {
   });
 
   log(`caller=${args.caller} delegation=${args.delegation} workspace=${args.workspace}`);
+  log(`codex_environment=${codexExecution.kind} codex_workspace=${codexExecution.runtime_workspace}`);
   return core.serve({
     server,
     label: `bridge-native-${args.caller}`,

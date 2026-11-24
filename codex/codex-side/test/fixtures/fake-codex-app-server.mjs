@@ -9,6 +9,16 @@ const failedWithoutUsage = process.argv.includes("--failed-without-usage");
 let threadCounter = 0;
 let turnCounter = 0;
 const cumulative = new Map();
+const permissions = new Map();
+const capturePath = process.argv.find(arg => arg.startsWith("--capture="))?.slice("--capture=".length);
+const linux = process.argv.includes("--linux-platform");
+const threadSettings = params => ({
+  cwd: params.cwd,
+  runtimeWorkspaceRoots: process.argv.includes("--foreign-root") ? ["C:\\foreign"] : params.runtimeWorkspaceRoots,
+  approvalPolicy: params.approvalPolicy,
+  sandbox: params.sandbox === "read-only" ? { type: "readOnly", networkAccess: false }
+    : { type: "workspaceWrite", writableRoots: [params.cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+});
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const resultText = () =>
@@ -38,6 +48,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (record && ["thread/start", "thread/resume", "turn/start"].includes(message.method)) {
     appendFileSync(record, `${JSON.stringify({ method: message.method, params: message.params })}\n`);
   }
+  if (capturePath) appendFileSync(capturePath, `${line}\n`);
   if (message.id === undefined) return;
 
   if (message.method === "initialize") {
@@ -47,7 +58,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       result: {
         codexHome: "C:/redacted",
         platformFamily: "windows",
-        platformOs: "windows",
+        platformOs: linux ? "linux" : "windows",
         userAgent: "Codex Desktop/0.147.0 (fixture)",
       },
     });
@@ -57,16 +68,19 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (message.method === "thread/start") {
     const threadId = `thread_app_${++threadCounter}`;
     cumulative.set(threadId, 0);
+    permissions.set(threadId, threadSettings(message.params));
     send({
       jsonrpc: "2.0",
       id: message.id,
-      result: { thread: { id: threadId }, model: message.params.model ?? "incompatible-desktop-model" },
+      result: { thread: { id: threadId }, model: message.params.model ?? "incompatible-desktop-model",
+        ...(linux ? permissions.get(threadId) : {}) },
     });
     return;
   }
 
   if (message.method === "config/read") {
-    send({ id: message.id, result: { config: { model: "incompatible-desktop-model", model_provider: "openai" } } });
+    send({ id: message.id, result: { config: { model: "incompatible-desktop-model", model_provider: "openai",
+      ...(linux && !process.argv.includes("--without-project-bridge") ? { mcp_servers: { bridge: { command: "fixture-bridge" } } } : {}) } } });
     return;
   }
   if (message.method === "model/list") {
@@ -82,8 +96,15 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     send({
       jsonrpc: "2.0",
       id: message.id,
-      result: { thread: { id: threadId }, model: "gpt-fixture" },
+      result: { thread: { id: threadId }, model: "gpt-fixture", ...(linux ? threadSettings(message.params) : {}) },
     });
+    return;
+  }
+
+  if (message.method === "thread/read") {
+    const cwd = process.argv.includes("--foreign-stored-workspace") ? "/home/kali/other-project"
+      : permissions.get(message.params.threadId)?.cwd ?? process.argv.find(arg => arg.startsWith("--read-cwd="))?.slice("--read-cwd=".length);
+    send({ id: message.id, result: { thread: { id: message.params.threadId, cwd } } });
     return;
   }
 

@@ -1,6 +1,7 @@
 export * from "./codex-adapter.js";
 export * from "./codex-mcp-client.js";
 export * from "./codex-app-server-client.js";
+export * from "./codex-execution-environment.js";
 export * from "./prompt.js";
 export {
   BRIDGE_SERVER_HELP,

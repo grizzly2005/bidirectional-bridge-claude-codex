@@ -158,6 +158,39 @@ function invocation(
 }
 
 describe("CodexAdapter", () => {
+  it("keeps WSL artifacts repo-relative and never sends the automatic Windows PATH", async () => {
+    const client = new FakeCodexClient();
+    Object.defineProperty(client, "usesWsl", { value: true });
+    client.startImpl = async () => ({ thread_id: "wsl_thread", content: resultJson({
+      changed_scope: ["codex/result.txt"], artifacts: [{ kind: "report", name: "result", media_type: "text/plain", path: "codex/result.txt" }],
+    }) });
+    const adapter = new CodexAdapter({ client, sandbox: "read-only" });
+    const captured = context();
+    const task = { ...invocation(), workspace_root: "\\\\wsl.localhost\\Ubuntu\\home\\kali\\project" };
+    await adapter.invoke(task, captured.ctx);
+    expect(client.starts[0]?.cwd).toBe(task.workspace_root);
+    expect(client.starts[0]?.sandbox).toBe("read-only");
+    expect(client.starts[0]?.config?.shell_environment_policy).not.toHaveProperty("set");
+    expect(captured.artifacts[0]?.path).toBe("codex/result.txt");
+    expect(captured.executionHandles).toEqual(["wsl_thread"]);
+    expect(() => new CodexAdapter({ client, tool_path: "C:\\tools;C:\\Windows" })).toThrow("Linux PATH");
+    await adapter.dispose();
+  });
+
+  it("preserves the same WSL child on a missing thread and never starts a replacement", async () => {
+    const client = new FakeCodexClient();
+    Object.defineProperty(client, "usesWsl", { value: true });
+    client.replyImpl = async () => { throw new BridgeError(ErrorCode.ADAPTER_FAILURE, "thread not found in Linux Codex home"); };
+    const adapter = new CodexAdapter({ client, sandbox: "read-only" });
+    await expect(adapter.invoke({ ...invocation(), previous_execution_handle: "original_windows_thread" }, context().ctx))
+      .rejects.toMatchObject({ code: ErrorCode.ADAPTER_FAILURE });
+    expect(client.starts).toHaveLength(0);
+    expect(client.replies).toHaveLength(1);
+    expect(client.replies[0]).toMatchObject({ thread_id: "original_windows_thread", cwd: process.cwd(), sandbox: "read-only", approval_policy: "never" });
+    expect(client.replies[0]?.config?.shell_environment_policy).not.toHaveProperty("set");
+    expect(client.replies[0]?.config?.mcp_servers).toEqual(DELEGATED_CODEX_MCP_SERVERS);
+    await adapter.dispose();
+  });
   it("bounds direct admission and cancels only the queued invocation", async () => {
     const client = new FakeCodexClient(); let release!: () => void; let started!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });

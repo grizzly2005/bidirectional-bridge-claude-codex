@@ -18,6 +18,7 @@ import {
   type CodexReplyRequest,
   type CodexStartRequest,
 } from "./codex-mcp-client.js";
+import { resolveCodexExecutionEnvironment, type CodexExecutionEnvironment } from "./codex-execution-environment.js";
 
 export interface CodexAppServerProcessClientOptions {
   /** Override only for deterministic tests or a deliberately pinned runtime. */
@@ -25,6 +26,8 @@ export interface CodexAppServerProcessClientOptions {
   /** Argv prefix; defaults to the bundled Codex launcher followed by `app-server`. */
   readonly args?: readonly string[];
   readonly cwd?: string;
+  /** Explicit Linux CLI in the distribution identified by a Windows WSL UNC cwd. */
+  readonly wsl_executable?: string;
   readonly env?: Readonly<Record<string, string>>;
   readonly connect_timeout_ms?: number;
   readonly request_timeout_ms?: number;
@@ -198,6 +201,9 @@ function runtimeVersion(userAgent: string): string | null {
  */
 export class CodexAppServerProcessClient implements CodexMcpClient {
   readonly supportsStopConfirmation = true;
+  readonly usesWsl: boolean;
+  private execution: CodexExecutionEnvironment | undefined;
+  private readonly wslTurnSettings = new Map<string, Record<string, unknown>>();
   private readonly runtimeCallbacks = new Map<string, NonNullable<CodexStartRequest["on_runtime_state"]>>();
   private readonly unconfirmedThreads = new Set<string>();
   private readonly options: Required<
@@ -225,6 +231,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
   private readonly retiredTurns = new Set<string>();
 
   constructor(options: CodexAppServerProcessClientOptions = {}) {
+    this.usesWsl = options.wsl_executable !== undefined;
     for (const [name, value] of [
       ["connect_timeout_ms", options.connect_timeout_ms ?? DEFAULT_CONNECT_TIMEOUT_MS],
       ["request_timeout_ms", options.request_timeout_ms ?? DEFAULT_REQUEST_TIMEOUT_MS],
@@ -267,15 +274,19 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
 
   async start(request: CodexStartRequest): Promise<CodexMcpResponse> {
     try {
+    const execution = this.executionEnvironment();
+    const cwd = execution.toRuntimeCwd(request.cwd);
+    const config = execution.toRuntimeConfig(request.config);
     const initialized = await this.ensureConnected();
-    const selectedModel = await this.resolveModel(request.cwd, request.model ??
+    const selectedModel = await this.resolveModel(cwd, request.model ??
       (typeof request.config?.["model"] === "string" ? request.config["model"] : undefined),
-      request.config, request.timeout_ms, request.signal);
+      config, request.timeout_ms, request.signal);
     const response = asRecord(
       await this.request(
         "thread/start",
         {
-          cwd: request.cwd,
+          cwd,
+          ...(this.usesWsl ? { runtimeWorkspaceRoots: [cwd] } : {}),
           approvalPolicy: request.approval_policy,
           sandbox: request.sandbox,
           ephemeral: false,
@@ -286,7 +297,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
           ...(request.base_instructions !== undefined
             ? { baseInstructions: request.base_instructions }
             : {}),
-          ...(request.config !== undefined ? { config: request.config } : {}),
+          ...(config !== undefined ? { config } : {}),
         },
         request.timeout_ms,
         request.signal,
@@ -295,6 +306,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
     const thread = asRecord(response["thread"]);
     const threadId = requiredString(thread, "id");
     const model = requiredString(response, "model");
+    this.bindWslThread(threadId, response, cwd, request.sandbox, request.approval_policy);
     this.loadedThreads.add(threadId);
     this.modelByThread.set(threadId, model);
     // App Server exposes the handle before a turn begins. Persist it now, so a crash during
@@ -318,13 +330,34 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
 
   async reply(request: CodexReplyRequest): Promise<CodexMcpResponse> {
     try {
+    const execution = this.executionEnvironment();
+    const cwd = request.cwd === undefined ? undefined : execution.toRuntimeCwd(request.cwd);
+    const config = execution.toRuntimeConfig(request.config);
+    if (this.usesWsl && (cwd === undefined || request.sandbox === undefined || request.approval_policy === undefined)) {
+      throw new BridgeError(ErrorCode.RUNTIME_PROFILE_MISMATCH, "Codex WSL resume requires the original workspace, sandbox and approval policy");
+    }
     const initialized = await this.ensureConnected();
     let model = this.modelByThread.get(request.thread_id);
     if (!this.loadedThreads.has(request.thread_id)) {
+      if (this.usesWsl) {
+        const stored = asRecord(await this.request("thread/read", { threadId: request.thread_id, includeTurns: false },
+          request.timeout_ms, request.signal));
+        if (asRecord(stored["thread"])["cwd"] !== cwd) {
+          throw new BridgeError(ErrorCode.RUNTIME_PROFILE_MISMATCH,
+            "Persisted Codex thread belongs to a different workspace; WSL resume cannot migrate sessions");
+        }
+      }
+      const runtimeConfig = await this.readRuntimeConfig(cwd, config, request.timeout_ms, request.signal);
       const response = asRecord(
         await this.request(
           "thread/resume",
-          { threadId: request.thread_id, ...(request.sandbox ? { sandbox: request.sandbox } : {}) },
+          { threadId: request.thread_id,
+            ...(cwd !== undefined ? { cwd } : {}),
+            ...(this.usesWsl ? { runtimeWorkspaceRoots: [cwd] } : {}),
+            ...(request.sandbox !== undefined ? { sandbox: request.sandbox } : {}),
+            ...(request.approval_policy !== undefined ? { approvalPolicy: request.approval_policy } : {}),
+            ...(config !== undefined ? { config } : {}),
+          },
           request.timeout_ms,
           request.signal,
         ),
@@ -338,10 +371,18 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
         );
       }
       model = requiredString(response, "model");
-      model = await this.resolveModel(request.cwd, undefined, undefined,
-        request.timeout_ms, request.signal, model) ?? model;
+      this.bindWslThread(resumedId, response, cwd, request.sandbox, request.approval_policy);
+      model = await this.resolveModel(cwd, undefined, config,
+        request.timeout_ms, request.signal, model, runtimeConfig) ?? model;
       this.loadedThreads.add(resumedId);
       this.modelByThread.set(resumedId, model);
+    }
+    if (this.usesWsl) {
+      const settings = this.wslTurnSettings.get(request.thread_id);
+      const type = request.sandbox === "read-only" ? "readOnly" : request.sandbox === "workspace-write" ? "workspaceWrite" : "dangerFullAccess";
+      if (settings === undefined || settings["cwd"] !== cwd || asRecord(settings["sandboxPolicy"])["type"] !== type || settings["approvalPolicy"] !== request.approval_policy) {
+        throw new BridgeError(ErrorCode.RUNTIME_PROFILE_MISMATCH, "Loaded Codex WSL thread has a different workspace or permission policy; strict resume refused");
+      }
     }
     await request.on_execution_handle?.(request.thread_id);
     return this.runTurn(
@@ -361,14 +402,36 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
     }
   }
 
+  private executionEnvironment(): CodexExecutionEnvironment {
+    return this.execution ??= resolveCodexExecutionEnvironment({
+      cwd: this.options.cwd ?? process.cwd(),
+      ...(this.options.wsl_executable !== undefined ? { wsl_executable: this.options.wsl_executable } : {}),
+    });
+  }
+
+  /** Fail before a turn if the runtime retained a foreign root or changed sandbox mode. */
+  private bindWslThread(threadId: string, response: Record<string, unknown>, cwd: string | undefined,
+    sandbox: CodexStartRequest["sandbox"] | undefined, approval: CodexStartRequest["approval_policy"] | undefined): void {
+    if (!this.usesWsl) return;
+    const roots = response["runtimeWorkspaceRoots"];
+    const policy = asRecord(response["sandbox"]);
+    const expected = sandbox === "read-only" ? "readOnly" : sandbox === "workspace-write" ? "workspaceWrite" : "dangerFullAccess";
+    const writable = policy["writableRoots"];
+    const withinRoot = (root: unknown): boolean => typeof root === "string" && typeof cwd === "string" &&
+      (root === cwd || (cwd !== "/" && root.startsWith(`${cwd}/`) && !root.split("/").includes("..")));
+    if (response["cwd"] !== cwd || !Array.isArray(roots) || roots.length !== 1 || roots[0] !== cwd ||
+        policy["type"] !== expected || response["approvalPolicy"] !== approval ||
+        (expected === "workspaceWrite" && (!Array.isArray(writable) || !writable.every(withinRoot)))) {
+      throw new BridgeError(ErrorCode.RUNTIME_PROFILE_MISMATCH, "Codex WSL did not confirm the selected Linux workspace roots and sandbox policy; no turn was launched");
+    }
+    this.wslTurnSettings.set(threadId, { cwd, runtimeWorkspaceRoots: [cwd], approvalPolicy: approval, sandboxPolicy: policy });
+  }
+
   /** Resolve implicit desktop preferences against the official runtime catalog. */
   private async resolveModel(cwd: string | undefined, explicit: string | undefined,
     overrides: Record<string, unknown> | undefined, timeoutMs: number, signal: AbortSignal,
-    resumedModel?: string): Promise<string | undefined> {
-    const read = asRecord(await this.request("config/read", {
-      includeLayers: false, ...(cwd !== undefined ? { cwd } : {}),
-    }, timeoutMs, signal));
-    const config = asRecord(read["config"]);
+    resumedModel?: string, runtimeConfig?: Record<string, unknown>): Promise<string | undefined> {
+    const config = runtimeConfig ?? await this.readRuntimeConfig(cwd, overrides, timeoutMs, signal);
     const provider = overrides?.["model_provider"] ?? config["model_provider"];
     const configured = typeof config["model"] === "string" ? config["model"] : undefined;
     // The OpenAI catalog does not define a custom provider's model namespace.
@@ -392,6 +455,26 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
         runtime_failure: { category: "profile", source: "runtime_code", retryable: false, retry_after_at: null },
       });
     return defaults[0]!.model;
+  }
+
+  private async readRuntimeConfig(cwd: string | undefined, overrides: Record<string, unknown> | undefined,
+    timeoutMs: number, signal: AbortSignal): Promise<Record<string, unknown>> {
+    const read = asRecord(await this.request("config/read", {
+      includeLayers: false, ...(cwd !== undefined ? { cwd } : {}),
+    }, timeoutMs, signal));
+    const config = asRecord(read["config"]);
+    if (this.usesWsl && overrides) {
+      const servers = asRecord(overrides["mcp_servers"] ?? {});
+      const bridge = asRecord(servers["bridge"] ?? {});
+      // Linux has its own config. Creating an enabled:false-only entry when no bridge
+      // is configured there fails Codex's transport validation even though it is disabled.
+      if (bridge["enabled"] === false && Object.keys(bridge).length === 1 &&
+          asRecord(config["mcp_servers"] ?? {})["bridge"] === undefined) {
+        delete servers["bridge"];
+        if (Object.keys(servers).length === 0) delete overrides["mcp_servers"];
+      }
+    }
+    return config;
   }
 
   private awaitCatalog(shared: Promise<readonly AvailableModel[]>, signal: AbortSignal): Promise<readonly AvailableModel[]> {
@@ -472,6 +555,8 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
       await this.request(
         "turn/start",
         { threadId, input: [{ type: "text", text: prompt }], ...(model !== null ? { model } : {}),
+          ...this.wslTurnSettings.get(threadId),
+          // A read-only bridge task must stay read-only even when a WSL profile supplies policy.
           ...(sandbox === "read-only" ? { sandboxPolicy: { type: "readOnly", networkAccess: false } } : {}) },
         requestedTimeoutMs,
         signal,
@@ -695,11 +780,12 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
   }
 
   private async openConnection(): Promise<InitializedRuntime> {
+    const execution = this.executionEnvironment();
     const bundled = resolveBundledCodexCliLauncher();
-    const command = this.options.command ?? bundled.command;
-    const args = [...(this.options.args ?? [...bundled.args, "app-server"])];
+    const command = this.options.command ?? execution.command ?? bundled.command;
+    const args = [...(this.options.args ?? execution.args ?? [...bundled.args, "app-server"])];
     const child = spawn(command, args, {
-      cwd: this.options.cwd,
+      cwd: execution.process_cwd,
       env: { ...getDefaultEnvironment(), ...this.options.env },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -716,6 +802,7 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
         this.child = undefined;
         this.initialized = undefined;
         this.loadedThreads.clear();
+        this.wslTurnSettings.clear();
       }
       if (!this.closed) {
         this.rejectAll(
@@ -739,6 +826,10 @@ export class CodexAppServerProcessClient implements CodexMcpClient {
       ),
     );
     const userAgent = requiredString(response, "userAgent");
+    if (this.usesWsl && response["platformOs"] !== "linux") {
+      child.stdin.end();
+      throw new BridgeError(ErrorCode.RUNTIME_PROFILE_MISMATCH, "Codex WSL requires a Linux App Server; Windows Codex through WSL interop is unsupported");
+    }
     this.notify("initialized", {});
     return { userAgent, version: runtimeVersion(userAgent) };
   }

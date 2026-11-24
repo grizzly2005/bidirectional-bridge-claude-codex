@@ -19,6 +19,14 @@ explicitly.
   and session. Recovery supplies the reports as verified file snapshots without expanding
   the frozen scope, deadlines or turn ceiling. See
   [BRIDGE-FIX-20261014-01](docs/pending-release-fixes.md#bridge-fix-20261014-01).
+- **BRIDGE-FIX-20261022-01:** explicitly support a Windows-hosted Codex App Server worker
+  against a WSL UNC workspace through a selected Linux executable in that distribution.
+  Map the process launch, session cwd, workspace/permission roots and configuration paths
+  together; keep artifacts and leases tied to the original repository. Refuse unsupported
+  native Windows UNC execution, foreign resume roots and Windows interop runtimes before
+  a worker turn. Ported from the local `0.3.1` working tree onto `0.4.0`; a reserved
+  `(no-write)` task keeps its read-only sandbox on every WSL continuation. See
+  [the fix and its validation limits](docs/fix-codex-windows-wsl.md).
 
 ### Documentation
 

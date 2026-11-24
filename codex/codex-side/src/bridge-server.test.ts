@@ -79,6 +79,14 @@ describe("parseBridgeServerArgs", () => {
     expect(BRIDGE_SERVER_HELP).toContain("--max-concurrency");
     expect(BRIDGE_SERVER_HELP).toContain("--tool-path");
     expect(BRIDGE_SERVER_HELP).toContain("--runtime-transport");
+    expect(BRIDGE_SERVER_HELP).toContain("--codex-wsl-executable");
+  });
+
+  it("accepts explicit WSL execution only for App Server", () => {
+    expect(parseBridgeServerArgs(["--codex-wsl-executable", "/usr/local/bin/codex"])).toMatchObject({
+      codex_wsl_executable: "/usr/local/bin/codex", runtime_transport: "app-server",
+    });
+    expect(() => parseBridgeServerArgs(["--runtime-transport", "mcp", "--codex-wsl-executable", "/usr/local/bin/codex"])).toThrow("requires --runtime-transport app-server");
   });
 
   it("shuts down the Codex adapter when neutral-server startup fails", async () => {

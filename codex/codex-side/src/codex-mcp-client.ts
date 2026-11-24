@@ -49,6 +49,8 @@ export interface CodexReplyRequest {
   readonly sandbox?: CodexSandbox;
   readonly thread_id: string;
   readonly cwd?: string;
+  readonly approval_policy?: CodexApprovalPolicy;
+  readonly config?: Record<string, unknown>;
   readonly prompt: string;
   readonly timeout_ms: number;
   readonly signal: AbortSignal;
@@ -68,6 +70,8 @@ export interface CodexMcpProbe {
 
 export interface CodexMcpClient {
   readonly supportsStopConfirmation?: boolean;
+  /** A Linux worker must never receive the host Windows shell PATH. */
+  readonly usesWsl?: boolean;
   probe(): Promise<CodexMcpProbe>;
   start(request: CodexStartRequest): Promise<CodexMcpResponse>;
   reply(request: CodexReplyRequest): Promise<CodexMcpResponse>;
