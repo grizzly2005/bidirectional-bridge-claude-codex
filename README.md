@@ -14,9 +14,10 @@ native project-scoped MCP server.
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
 
-The latest published checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.1).
-See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
-opt-in delegation tracking, downloads and verification.
+The latest published checkpoint is [v0.4.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.4.0);
+the current `main` is the **v0.5.0** candidate. Earlier checkpoints:
+[v0.3.1 notes](docs/releases/v0.3.1.md) (durable execution, schema-v4 migration, opt-in
+delegation tracking).
 
 **v0.5.0** ([notes](docs/releases/v0.5.0.md)) adds Gemini/Antigravity as a third runtime
 (six delegation directions, sparse by default), manager-selectable models per runtime
@@ -26,7 +27,7 @@ pending local fixes BRIDGE-FIX-20261014-01 and BRIDGE-FIX-20261022-01, and curre
 dependencies. The Gemini *worker* is opt-in (`--gemini-auth api-key|enterprise`): Google
 does not support third-party agents driving a consumer Antigravity login.
 
-The [v0.4.0 candidate](docs/releases/v0.4.0.md) adds
+[v0.4.0](docs/releases/v0.4.0.md) added
 [web-audit assistance and bridge reliability fixes](docs/web-audit-experimental.md)
 and [shared working memory](docs/shared-memory.md). Its bridge packages/runtime use0.4.0,
 wire marker1.4.0 and SQLite6; the experimental web-audit module retains its own0.1.0 version.

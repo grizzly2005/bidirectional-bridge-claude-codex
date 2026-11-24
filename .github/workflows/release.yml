@@ -76,6 +76,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Title from the notes heading ("# v0.5.0 — Subject" -> "v0.5.0 - Subject").
+          title="$(sed -n '1s/^# //p' "docs/releases/$RELEASE_TAG.md" | sed 's/ — / - /')"
+          test -n "$title"
           gh release create "$RELEASE_TAG" tmp/release-assets/* --draft --verify-tag \
-            --title "$RELEASE_TAG - Shared memory and experimental web audits" \
-            --notes-file "docs/releases/$RELEASE_TAG.md"
+            --title "$title" --notes-file "docs/releases/$RELEASE_TAG.md"
