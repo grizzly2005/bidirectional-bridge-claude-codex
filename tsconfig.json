@@ -5,8 +5,10 @@
     { "path": "shared/web-audit" },
     { "path": "shared/control-plane" },
     { "path": "shared/mcp-server-core" },
+    { "path": "shared/runner-adapter" },
     { "path": "claude/claude-side" },
-    { "path": "codex" }
+    { "path": "codex" },
+    { "path": "gemini/gemini-side" }
   ],
   "//": "codex/tsconfig.json is codex-owned and referenced (not edited) so a single root build covers the whole bridge; without it `npm run build` left codex/dist absent and the default bridge-codex-mcp launcher could not start."
 }

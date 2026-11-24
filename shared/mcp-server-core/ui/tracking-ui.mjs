@@ -1,6 +1,7 @@
 import {
   TASK_STATES, cleanLabel, normalizeSnapshot, mergeSnapshot, chooseSelection, getFreshness, resolveFollowMode,
   shouldAnimate, describeTask, attemptLabel, knownMetric, graphLayout, normalizeHistory, mergeHistory,
+  tokenShareByRuntime,
 } from "./tracking-state.mjs";
 import { createTrackingPoller } from "./tracking-poller.mjs";
 
@@ -28,7 +29,7 @@ function badge(document, value) {
 }
 
 function ownerLabel(owner) {
-  return owner === "codex" ? "Codex" : owner === "claude" || owner === "claude-code" ? "Claude" : owner || "Sans responsable";
+  return owner === "codex" ? "Codex" : owner === "claude" || owner === "claude-code" ? "Claude" : owner === "gemini" ? "Gemini" : owner || "Sans responsable";
 }
 
 function formatDate(value) {
@@ -164,7 +165,7 @@ export function mountTrackingUI({ root, transport }) {
   }
   const ownerFilter = document.createElement("select");
   ownerFilter.setAttribute("aria-label", "Filtrer les sessions par responsable");
-  for (const [value, label] of [["", "Tous les responsables"], ["codex", "Codex"], ["claude", "Claude"]]) {
+  for (const [value, label] of [["", "Tous les responsables"], ["codex", "Codex"], ["claude", "Claude"], ["gemini", "Gemini"]]) {
     const option = textElement(document, "option", label);
     option.value = value;
     ownerFilter.append(option);
@@ -180,6 +181,10 @@ export function mountTrackingUI({ root, transport }) {
   const summary = textElement(document, "p", "Aucune délégation reçue.", "bt-summary");
   summary.setAttribute("aria-live", "polite");
   summary.setAttribute("aria-atomic", "true");
+  const share = textElement(document, "section", undefined, "bt-share");
+  share.setAttribute("aria-label", "Répartition des tokens communiqués par runtime délégué");
+  share.hidden = true;
+  let lastShareKey = "";
   const content = textElement(document, "div", undefined, "bt-content");
   const graphViewport = textElement(document, "div", undefined, "bt-graph-viewport");
   graphViewport.setAttribute("aria-label", "Délégations ; sélectionnez une tâche pour lire ses détails");
@@ -202,7 +207,7 @@ export function mountTrackingUI({ root, transport }) {
   const disableButton = button(document, "Désactiver le suivi");
   disableButton.setAttribute("aria-label", "Désactiver le suivi des prochaines délégations ; les tâches continuent");
   footer.append(disableButton);
-  panel.append(header, statusRow, statusExplanation, toolbar, notice, historySection, summary, content, legend, footer);
+  panel.append(header, statusRow, statusExplanation, toolbar, notice, historySection, summary, share, content, legend, footer);
   root.replaceChildren(panel);
 
   function showNotice(message) {
@@ -279,6 +284,31 @@ export function mountTrackingUI({ root, transport }) {
   function queueDraw() {
     if (drawFrame !== null || !window || destroyed || closed) return;
     drawFrame = window.requestAnimationFrame(drawLinks);
+  }
+
+  function renderShare() {
+    const rows = tokenShareByRuntime(snapshot);
+    const key = JSON.stringify(rows);
+    if (key === lastShareKey) return;
+    lastShareKey = key;
+    share.hidden = rows.length === 0;
+    if (rows.length === 0) { share.replaceChildren(); return; }
+    const list = textElement(document, "ul", undefined, "bt-share-list");
+    for (const row of rows) {
+      const item = textElement(document, "li", undefined, "bt-share-row");
+      const label = textElement(document, "span", ownerLabel(row.agent), "bt-share-agent");
+      const bar = textElement(document, "span", undefined, "bt-share-bar");
+      const fill = textElement(document, "span", undefined, "bt-share-fill");
+      fill.style.width = row.share === null ? "0%" : `${Math.round(row.share * 1000) / 10}%`;
+      bar.append(fill);
+      const percent = row.share === null ? "—" : `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(row.share * 100)} %`;
+      const measured = row.unknown_attempts < row.attempts ? `${knownMetric(row.total_tokens)} tokens` : "Non mesuré";
+      const detail = `${measured} · ${percent} · ${row.attempts} tentative(s)${row.unknown_attempts ? ` dont ${row.unknown_attempts} non mesurée(s)` : ""}`;
+      item.append(label, bar, textElement(document, "span", detail, "bt-share-detail"));
+      list.append(item);
+    }
+    share.replaceChildren(textElement(document, "h2", "Tokens délégués par runtime"), list,
+      textElement(document, "p", "Totaux communiqués par les runtimes délégués ; la session du gestionnaire n’est pas mesurée ici.", "bt-muted"));
   }
 
   function renderDetails() {
@@ -398,6 +428,7 @@ export function mountTrackingUI({ root, transport }) {
     const blocked = tasks.filter((task) => task.state === "BLOCKED").length;
     const text = tasks.length ? `${tasks.length} tâches · ${working} en cours · ${blocked} bloquées${snapshot?.truncated ? " · vue limitée" : ""}` : "Aucune délégation reçue.";
     if (text !== lastSummary) { summary.textContent = text; lastSummary = text; }
+    renderShare();
     followButton.hidden = autoFollow;
     graphButton.setAttribute("aria-pressed", String(graphMode));
     listButton.setAttribute("aria-pressed", String(!graphMode));

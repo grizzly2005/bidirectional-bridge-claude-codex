@@ -6,6 +6,7 @@
   "references": [
     { "path": "../../shared/protocol" },
     { "path": "../../shared/control-plane" },
-    { "path": "../../shared/mcp-server-core" }
+    { "path": "../../shared/mcp-server-core" },
+    { "path": "../../shared/runner-adapter" }
   ]
 }

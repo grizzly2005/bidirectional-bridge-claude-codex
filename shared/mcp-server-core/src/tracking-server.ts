@@ -13,9 +13,9 @@ export class TrackingMcpServer {
   readonly mcp: McpServer;
   readonly toolNames = TRACKING_TOOL_NAMES;
   private closed = false;
-  constructor(options: TrackingOptions) {
+  constructor(options: TrackingOptions & { readonly browserPort?: number }) {
     this.tracking = new TrackingCoordinator(options);
-    this.browser = new TrackingHttpServer(this.tracking);
+    this.browser = new TrackingHttpServer(this.tracking, options.browserPort ?? 0);
     this.mcp = new McpServer({ name: "bridge-tracking-observer", version: BRIDGE_VERSION },
       { instructions: "Read-only bridge observation. Activate bridge_tracking_open on explicit request. Closing the view does not cancel tasks. This server cannot delegate, recover, resume or mutate bridge tasks." });
     registerTracking(this.mcp, this.tracking, this.browser);

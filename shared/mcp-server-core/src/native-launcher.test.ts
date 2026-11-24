@@ -38,7 +38,7 @@ class NativeHarness {
   readonly exited: Promise<number | null>;
 
   constructor(
-    caller: "codex" | "claude",
+    caller: "codex" | "claude" | "gemini",
     policy: "allow" | "deny",
     workspace?: string,
     db?: string,
@@ -205,7 +205,7 @@ describe("native project MCP launcher", () => {
     expect(() => module.parseNativeBridgeArgs(["--caller", "claude"]))
       .toThrow("--delegation must be allow or deny");
     expect(() => module.parseNativeBridgeArgs(["--caller", "supervisor", "--delegation", "allow"]))
-      .toThrow("--caller must be codex or claude");
+      .toThrow("--caller must be codex, claude or gemini");
   });
 
   it("exposes a portable linked command with a Unix shebang", () => {
@@ -217,6 +217,7 @@ describe("native project MCP launcher", () => {
     expect(rootPackage.bin).toEqual({
       "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
       "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs",
+      "bridge-dashboard": "./scripts/bridge-dashboard.mjs",
     });
     expect(readFileSync(launcher, "utf8").split(/\r?\n/u)[0]).toBe("#!/usr/bin/env node");
     if (process.platform !== "win32") expect(statSync(launcher).mode & 0o111).not.toBe(0);
@@ -423,6 +424,61 @@ describe("native project MCP launcher", () => {
           `codex-deny stderr: ${codexDenied.stderr.join("").slice(-1000)}`,
         ].join("\n"),
       ).toEqual([0, 0, 0]);
+    }
+  }, 30_000);
+
+  it("binds a gemini caller and shares model preferences across separate processes", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "bridge-native-models-"));
+    const db = join(workspace, ".bridge", "shared.db");
+    const gemini = new NativeHarness("gemini", "allow", workspace, db);
+    const codex = new NativeHarness("codex", "allow", workspace, db);
+    const geminiDenied = new NativeHarness("gemini", "deny", workspace, db);
+    try {
+      await gemini.initialize();
+      await codex.initialize();
+      await geminiDenied.initialize();
+      expect((await gemini.callTool("bridge_server_info")).data).toEqual({ caller: "gemini", delegation: "allow" });
+      const initial = (await codex.callTool("bridge_get_model_preferences")).data;
+      expect(Object.keys(initial.runtimes).sort()).toEqual(["claude", "codex", "gemini"]);
+      expect(initial.runtimes.claude.model).toBeNull();
+      const set = await gemini.callTool("bridge_set_model_preference", { runtime: "claude", model: "opus", effort: "high" });
+      expect(set.isError).not.toBe(true);
+      const seen = (await codex.callTool("bridge_get_model_preferences")).data;
+      expect(seen.runtimes.claude).toMatchObject({ model: "opus", effort: "high", updated_by: "gemini" });
+      // Schema validation rejects a flag-shaped slug before the handler (non-JSON MCP error).
+      const flag = await codex.callTool("bridge_set_model_preference", { runtime: "gemini", model: "--dangerously-skip-permissions" })
+        .then((result) => result.isError, () => true);
+      expect(flag).toBe(true);
+      expect((await codex.callTool("bridge_get_model_preferences")).data.runtimes.gemini.model).toBeNull();
+      const unknown = await codex.callTool("bridge_set_model_preference", { runtime: "grok", model: "x" });
+      expect(unknown.isError).toBe(true);
+      const denied = await geminiDenied.callTool("bridge_set_model_preference", { runtime: "codex", model: "x" });
+      expect(denied.isError).toBe(true);
+      const cleared = await codex.callTool("bridge_set_model_preference", { runtime: "claude", model: null, effort: null });
+      expect(cleared.data.preference).toEqual({ model: null, effort: null });
+    } finally {
+      const exits = await Promise.all([gemini.shutdown(), codex.shutdown(), geminiDenied.shutdown()]);
+      rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      expect(exits, `gemini stderr: ${gemini.stderr.join("").slice(-1000)}`).toEqual([0, 0, 0]);
+    }
+  }, 30_000);
+
+  it("refuses to start a coordination server inside a delegated worker", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "bridge-native-worker-"));
+    try {
+      const child = spawn(process.execPath, [launcher, "--caller", "gemini", "--delegation", "allow", "--workspace", workspace],
+        { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, BRIDGE_DELEGATED_WORKER: "1" } });
+      let stderr = "";
+      let stdout = "";
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+      const code = await new Promise<number | null>((done) => child.once("exit", done));
+      expect(code).not.toBe(0);
+      expect(stderr).toMatch(/inside a delegated worker/);
+      expect(stdout).toBe("");
+      expect(existsSync(join(workspace, ".bridge", "bridge.db"))).toBe(false);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   }, 30_000);
 });

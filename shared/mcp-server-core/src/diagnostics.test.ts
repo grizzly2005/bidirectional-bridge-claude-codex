@@ -25,7 +25,7 @@ afterEach(() => {
 function installation(): string {
   const directory = mkdtempSync(join(tmpdir(), "bridge-doctor-tests-"));
   temporary.push(directory);
-  for (const pkg of ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "claude/claude-side", "codex/codex-side"]) {
+  for (const pkg of ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "shared/runner-adapter", "claude/claude-side", "codex/codex-side", "gemini/gemini-side"]) {
     for (const kind of ["src", "dist"]) {
       const subdirectory = join(directory, pkg, kind);
       mkdirSync(subdirectory, { recursive: true });
@@ -157,7 +157,7 @@ describe("live support diagnostics", () => {
     const result = bridgeDiagnostics(cp, { repositoryRoot: repository });
     expect(result.identity.current_disk.source.skipped_symlinks).toBe(1);
     expect(result.identity.current_disk.source.complete).toBe(false);
-    expect(result.identity.current_disk.source.file_count).toBe(6);
+    expect(result.identity.current_disk.source.file_count).toBe(8);
     expect(JSON.stringify(result)).not.toContain(external);
   });
 });
@@ -165,7 +165,7 @@ describe("live support diagnostics", () => {
 describe("offline doctor", () => {
   it("runs without dist and does not create a missing historical database", () => {
     const repository = installation();
-    for (const pkg of ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "claude/claude-side", "codex/codex-side"]) rmSync(join(repository, pkg, "dist"), { recursive: true });
+    for (const pkg of ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "shared/runner-adapter", "claude/claude-side", "codex/codex-side", "gemini/gemini-side"]) rmSync(join(repository, pkg, "dist"), { recursive: true });
     const path = join(repository, ".bridge/bridge.db");
     const result = runDoctor(repository, path);
     expect(existsSync(join(repository, ".bridge"))).toBe(false);

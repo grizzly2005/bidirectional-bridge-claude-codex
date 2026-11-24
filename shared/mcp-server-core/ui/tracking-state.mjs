@@ -206,6 +206,26 @@ export function knownMetric(value, unit = "") {
     ? `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(value)}${unit ? ` ${unit}` : ""}` : "Non mesuré";
 }
 
+/**
+ * Runtime-reported token totals per delegated runtime for the attempts in view. Unknown
+ * totals are counted, never estimated; shares use known totals only.
+ */
+export function tokenShareByRuntime(snapshot) {
+  const rows = new Map();
+  for (const attempt of snapshot?.attempts ?? []) {
+    const agent = cleanLabel(attempt.agent, "inconnu", 64);
+    const row = rows.get(agent) ?? { agent, total_tokens: 0, attempts: 0, unknown_attempts: 0 };
+    row.attempts += 1;
+    const total = attempt.telemetry?.total_tokens;
+    if (typeof total === "number" && Number.isFinite(total) && total >= 0) row.total_tokens += total;
+    else row.unknown_attempts += 1;
+    rows.set(agent, row);
+  }
+  const known = [...rows.values()].reduce((sum, row) => sum + row.total_tokens, 0);
+  return [...rows.values()].sort((a, b) => a.agent.localeCompare(b.agent))
+    .map((row) => ({ ...row, share: known > 0 ? row.total_tokens / known : null }));
+}
+
 export function graphLayout(tasks) {
   const ordered = [...tasks].sort(compareTasks);
   const rows = new Map();

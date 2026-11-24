@@ -13,6 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIST_DIRS = (
     "shared/protocol/dist", "shared/control-plane/dist", "shared/mcp-server-core/dist",
     "claude/claude-side/dist", "codex/codex-side/dist", "shared/web-audit/dist",
+    "shared/runner-adapter/dist", "gemini/gemini-side/dist",
 )
 WORKSPACES = tuple(pathlib.PurePosixPath(p).parent.as_posix() for p in DIST_DIRS)
 # Web audit has its own experimental module version; bridge packages share the checkpoint.

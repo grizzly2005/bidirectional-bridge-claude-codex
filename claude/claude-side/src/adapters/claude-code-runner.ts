@@ -69,6 +69,13 @@ import {
   type VerificationResult,
 } from "@bridge/protocol";
 import type { ClaudeRunResult, ClaudeRunner } from "./claude-adapter.js";
+import {
+  modelSatisfiesRequest,
+  resolveModelSelection,
+  type ModelPreference,
+  type ModelPreferenceReader,
+  type ModelSelection,
+} from "@bridge/runner-adapter";
 
 /* ------------------------------------------------------------------ *
  * Stream protocol
@@ -205,6 +212,14 @@ export interface ClaudeCodeRunnerOptions {
   /** Diagnostics sink. Never stdout — a launcher's stdout is the MCP transport. */
   readonly log?: (line: string) => void;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Default model/effort when neither the task nor a stored preference selects one.
+   * Omitted keeps the historical bridge profile (`opus` / `high`); `{ model: null,
+   * effort: null }` passes no flag so Claude Code's own default model applies.
+   */
+  readonly defaultProfile?: ModelPreference;
+  /** Persisted manager preference for the Claude runtime, read on every invocation. */
+  readonly modelPreference?: ModelPreferenceReader;
 }
 
 export interface ClaudeStructuredOutput {
@@ -224,7 +239,11 @@ export interface ClaudeStructuredOutput {
 
 const DEFAULT_KILL_GRACE_MS = 5_000;
 
-/** Bridge-owned Claude profile. Delegation payloads and launcher defaults cannot replace it. */
+/**
+ * Historical bridge Claude profile, kept as the runner default for embedders that pass no
+ * `defaultProfile`. The native launcher uses the Claude Code default unless a task or a
+ * stored preference selects a model.
+ */
 export const CLAUDE_REQUESTED_MODEL = "opus";
 export const CLAUDE_REQUESTED_EFFORT = "high";
 export const CLAUDE_AUDIT_RECOMMENDED_MAX_TURNS = 32;
@@ -355,8 +374,8 @@ export function normalizeClaudeUsage(usage: unknown): NormalizedClaudeUsage {
 export interface ClaudeRunnerTelemetry {
   readonly runtime: typeof CLAUDE_RUNTIME_NAME;
   readonly runtime_version: string | null;
-  readonly requested_model: typeof CLAUDE_REQUESTED_MODEL;
-  readonly requested_effort: typeof CLAUDE_REQUESTED_EFFORT;
+  readonly requested_model: string | null;
+  readonly requested_effort: string | null;
   readonly model: string | null;
   readonly runtime_started_at: number;
   readonly first_output_at: number | null;
@@ -655,6 +674,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
   private readonly command: string;
   private readonly log: (line: string) => void;
   private readonly defaultMaxTurns: number;
+  /** Selection frozen at the start of each run so args, guards and telemetry agree. */
+  private readonly selections = new Map<string, ModelSelection>();
   /** Session ids seen per task, so `cancel` and diagnostics can reference them. */
   readonly lastSessionId = new Map<string, string>();
   /**
@@ -822,8 +843,19 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     return false;
   }
 
+  /** Effective model/effort for an invocation: task, then stored preference, then default. */
+  modelSelectionFor(invocation: TaskInvocation): ModelSelection {
+    const pinned = this.selections.get(invocation.task_id);
+    if (pinned) return pinned;
+    return resolveModelSelection(invocation, {
+      ...(this.options.modelPreference ? { preference: this.options.modelPreference } : {}),
+      runnerDefault: this.options.defaultProfile ?? { model: CLAUDE_REQUESTED_MODEL, effort: CLAUDE_REQUESTED_EFFORT },
+    });
+  }
+
   buildArgs(invocation: TaskInvocation, _prompt: string): string[] {
     const o = this.options;
+    const selection = this.modelSelectionFor(invocation);
     const maxTurns = validatedMaxTurns(
       invocation.spec.max_turns ?? this.defaultMaxTurns,
       "TaskSpec.max_turns",
@@ -836,10 +868,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       "stream-json",
       // stream-json requires verbose; without it the CLI refuses the combination.
       "--verbose",
-      "--model",
-      CLAUDE_REQUESTED_MODEL,
-      "--effort",
-      CLAUDE_REQUESTED_EFFORT,
+      ...(selection.model !== null ? ["--model", selection.model] : []),
+      ...(selection.effort !== null ? ["--effort", selection.effort] : []),
       "--max-turns",
       String(maxTurns),
       "--permission-mode",
@@ -894,8 +924,15 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     const resuming = this.options.allowResume !== false && Boolean(invocation.previous_execution_handle);
     let prompt: string;
     let args: string[];
-    try { prompt = buildPrompt(invocation, resuming, invocation.spec.max_turns ?? this.defaultMaxTurns); args = this.buildArgs(invocation, prompt); }
-    catch (error) { await ctx.reportRuntimeState?.("stopped"); throw error; }
+    let selection: ModelSelection;
+    try {
+      this.selections.delete(invocation.task_id);
+      selection = this.modelSelectionFor(invocation);
+      this.selections.set(invocation.task_id, selection);
+      prompt = buildPrompt(invocation, resuming, invocation.spec.max_turns ?? this.defaultMaxTurns);
+      args = this.buildArgs(invocation, prompt);
+    }
+    catch (error) { this.selections.delete(invocation.task_id); await ctx.reportRuntimeState?.("stopped"); throw error; }
 
     if (ctx.signal.aborted || invocation.deadline_at <= Date.now()) {
       await ctx.reportRuntimeState?.("stopped");
@@ -917,7 +954,9 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       child = spawn(this.command, args, {
         cwd: invocation.workspace_root,
         stdio: ["pipe", "pipe", "pipe"],
-        env: this.options.env ?? process.env,
+        // The marker makes the native bridge launcher refuse to start inside this worker, so
+        // a project-scoped bridge MCP server can never hand it a manager identity.
+        env: { ...(this.options.env ?? process.env), BRIDGE_DELEGATED_WORKER: "1", BRIDGE_DELEGATED_RUNTIME: "claude" },
         windowsHide: true,
         detached: process.platform !== "win32",
       });
@@ -1031,7 +1070,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       }
 
       if (frame.type === "assistant" && checkpointArtifacts.length < 4 && !ctx.signal.aborted &&
-          (model === null || isOpusFamilyModel(model))) {
+          modelSatisfiesRequest(selection.model, model)) {
         const content = (frame as { message?: { content?: unknown } }).message?.content;
         if (Array.isArray(content)) for (const item of content) {
           if (checkpointArtifacts.length >= 4 || !item || item.type !== "text" || typeof item.text !== "string") continue;
@@ -1117,6 +1156,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     if (!stopConfirmed) {
       void chain.catch(() => {}); // remaining fenced observations cannot mask stop uncertainty
       const observed = buildRunnerTelemetry({ frame: null, runtime_version: runtimeVersion, model,
+        requested_model: selection.model, requested_effort: selection.effort,
         started_at: startedAt, first_output_at: firstOutputAt, ended_at: Date.now(),
         prompt_bytes: Buffer.byteLength(prompt, "utf8"), exit_code: exitCode, exit_signal: exitSignal,
         cancelled: killedForCancel, timed_out: killedForDeadline });
@@ -1140,6 +1180,8 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       frame: resultFrame ?? runtimeErrorFrame,
       runtime_version: runtimeVersion,
       model,
+      requested_model: selection.model,
+      requested_effort: selection.effort,
       started_at: startedAt,
       first_output_at: firstOutputAt,
       ended_at: endedAt,
@@ -1149,8 +1191,7 @@ export class ClaudeCodeRunner implements ClaudeRunner {
       cancelled: killedForCancel,
       timed_out: killedForDeadline,
     });
-    const profileMismatch =
-      telemetry.model !== null && !isOpusFamilyModel(telemetry.model);
+    const profileMismatch = !modelSatisfiesRequest(selection.model, telemetry.model);
     if (profileMismatch) {
       telemetry = { ...telemetry, termination_kind: AttemptTerminationKind.FAILED,
         runtime_failure: { category: "profile", source: "runtime_code", retryable: false, retry_after_at: null } };
@@ -1203,11 +1244,11 @@ export class ClaudeCodeRunner implements ClaudeRunner {
     if (profileMismatch) {
       throw new BridgeError(
         ErrorCode.RUNTIME_PROFILE_MISMATCH,
-        `Claude runtime profile mismatch: requested '${CLAUDE_REQUESTED_MODEL}' but runtime reported '${telemetry.model}'`,
+        `Claude runtime profile mismatch: requested '${selection.model}' but runtime reported '${telemetry.model}'`,
         {
           task_id: invocation.task_id,
-          requested_model: CLAUDE_REQUESTED_MODEL,
-          requested_effort: CLAUDE_REQUESTED_EFFORT,
+          requested_model: selection.model,
+          requested_effort: selection.effort,
           actual_model: telemetry.model,
         },
       );
@@ -1324,6 +1365,9 @@ export interface BuildRunnerTelemetryInput {
   readonly frame: ClaudeResultFrame | null;
   readonly runtime_version: string | null;
   readonly model: string | null;
+  /** Effective request; omitted keeps the historical `opus` / `high` profile. */
+  readonly requested_model?: string | null;
+  readonly requested_effort?: string | null;
   readonly started_at: number;
   readonly first_output_at: number | null;
   readonly ended_at: number;
@@ -1379,8 +1423,8 @@ export function buildRunnerTelemetry(input: BuildRunnerTelemetryInput): ClaudeRu
   return {
     runtime: CLAUDE_RUNTIME_NAME,
     runtime_version: input.runtime_version,
-    requested_model: CLAUDE_REQUESTED_MODEL,
-    requested_effort: CLAUDE_REQUESTED_EFFORT,
+    requested_model: input.requested_model !== undefined ? input.requested_model : CLAUDE_REQUESTED_MODEL,
+    requested_effort: input.requested_effort !== undefined ? input.requested_effort : CLAUDE_REQUESTED_EFFORT,
     model: input.model ?? modelFromUsage(frame),
     runtime_started_at: input.started_at,
     first_output_at: input.first_output_at,

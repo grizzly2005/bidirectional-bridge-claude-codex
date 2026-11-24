@@ -13,7 +13,7 @@ const schemas = {
   bridge_tracking_open: z.object({ run_id: runId.optional(), context_key: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u).optional(), follow_current: z.boolean().optional(), display: z.enum(["inline", "browser"]).default("inline") }).strict(),
   bridge_tracking_bind: z.object({ view_id: viewId, run_id: runId.nullable() }).strict(),
   bridge_tracking_read: z.object({ view_id: viewId, after: cursor.optional() }).strict(),
-  bridge_tracking_history: z.object({ view_id: viewId, page_token: cursor.optional(), state: z.enum(["PENDING", "CLAIMED", "WORKING", "BLOCKED", "VERIFYING", "DONE", "FAILED", "CANCELLED"]).optional(), owner: z.enum(["claude", "codex", "bridge"]).optional(), limit: z.number().int().min(1).max(50).optional() }).strict(),
+  bridge_tracking_history: z.object({ view_id: viewId, page_token: cursor.optional(), state: z.enum(["PENDING", "CLAIMED", "WORKING", "BLOCKED", "VERIFYING", "DONE", "FAILED", "CANCELLED"]).optional(), owner: z.enum(["claude", "codex", "gemini", "bridge"]).optional(), limit: z.number().int().min(1).max(50).optional() }).strict(),
   bridge_tracking_close: z.object({ view_id: viewId, disable: z.boolean().optional() }).strict(),
 };
 export const TRACKING_TOOL_NAMES = Object.keys(schemas);

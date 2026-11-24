@@ -8,6 +8,7 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../../shared/protocol" },
-    { "path": "../../shared/mcp-server-core" }
+    { "path": "../../shared/mcp-server-core" },
+    { "path": "../../shared/runner-adapter" }
   ]
 }

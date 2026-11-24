@@ -31,6 +31,11 @@ import { CodexAppServerProcessClient } from "./codex-app-server-client.js";
 import { publishCodexArtifact, ArtifactOutputPublicationError } from "./artifact-output.js";
 import { resolveCodexExecutionEnvironment } from "./codex-execution-environment.js";
 import {
+  resolveModelSelection,
+  type ModelPreferenceReader,
+  type ModelSelection,
+} from "@bridge/runner-adapter";
+import {
   CODEX_DEVELOPER_INSTRUCTIONS,
   buildRepairPrompt,
   buildResumePrompt,
@@ -51,6 +56,12 @@ export interface CodexAdapterOptions {
   readonly max_idempotency_entries?: number;
   /** Exact PATH for delegated shell tools. `null` disables the safe automatic PATH layer. */
   readonly tool_path?: string | null;
+  /**
+   * Persisted manager preference for the Codex runtime, read at each new delegation.
+   * `model` selects the thread model; `effort` sets `model_reasoning_effort`. A task's own
+   * `spec.model` / `spec.effort` wins; with neither, Codex uses its configured default.
+   */
+  readonly model_preference?: ModelPreferenceReader;
   readonly now?: () => number;
 }
 
@@ -301,6 +312,9 @@ export class CodexAdapter implements AgentAdapter {
 
   private readonly client: CodexMcpClient;
   private readonly model: string | undefined;
+  private readonly modelPreference: ModelPreferenceReader | undefined;
+  /** Selection frozen per task at admission so start, repair and resume agree. */
+  private readonly selections = new Map<TaskId, ModelSelection>();
   private readonly approvalPolicy: CodexApprovalPolicy;
   private readonly sandbox: CodexSandbox;
   private readonly maxStructureRepairs: number;
@@ -322,6 +336,7 @@ export class CodexAdapter implements AgentAdapter {
       "max_pending_invocations must be a non-negative integer");
     this.client = options.client ?? new CodexAppServerProcessClient();
     this.model = options.model;
+    this.modelPreference = options.model_preference;
     this.approvalPolicy = options.approval_policy ?? "never";
     this.sandbox = options.sandbox ?? "workspace-write";
     this.maxStructureRepairs = options.max_structure_repairs ?? 1;
@@ -539,6 +554,9 @@ export class CodexAdapter implements AgentAdapter {
       });
 
       if (!this.client.usesWsl) resolveCodexExecutionEnvironment({ cwd: invocation.workspace_root });
+      const selection = this.modelSelectionFor(invocation, true);
+      runtimeTelemetry.requested_model = selection.model;
+      runtimeTelemetry.requested_effort = selection.effort;
       runtimeLaunched = true;
       const first = await this.startOrResume(invocation, transportContext, controller.signal);
       runtimeStopConfirmed = true;
@@ -685,7 +703,7 @@ export class CodexAdapter implements AgentAdapter {
           approval_policy: this.approvalPolicy,
           // A reserved no-write task stays read-only on every continuation (WSL included).
           sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
-          config: this.workerConfig(),
+          config: this.workerConfig(this.modelSelectionFor(invocation).effort),
           prompt: buildRepairPrompt(error),
           timeout_ms: this.remainingMs(invocation),
           signal,
@@ -729,7 +747,7 @@ export class CodexAdapter implements AgentAdapter {
           cwd: invocation.workspace_root,
           approval_policy: this.approvalPolicy,
           sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
-          config: this.workerConfig(),
+          config: this.workerConfig(this.modelSelectionFor(invocation).effort),
           prompt: buildResumePrompt(invocation),
           timeout_ms: this.remainingMs(invocation),
           signal,
@@ -774,8 +792,8 @@ export class CodexAdapter implements AgentAdapter {
       cwd: invocation.workspace_root,
       approval_policy: this.approvalPolicy,
       sandbox: isReadOnlyScope(invocation.spec.scope) ? "read-only" : this.sandbox,
-      ...(this.model !== undefined ? { model: this.model } : {}),
-      config: this.workerConfig(),
+      ...(this.modelSelectionFor(invocation).model !== null ? { model: this.modelSelectionFor(invocation).model as string } : {}),
+      config: this.workerConfig(this.modelSelectionFor(invocation).effort),
       developer_instructions: CODEX_DEVELOPER_INSTRUCTIONS,
       timeout_ms: this.remainingMs(invocation),
       signal,
@@ -792,11 +810,28 @@ export class CodexAdapter implements AgentAdapter {
     return started;
   }
 
-  private workerConfig(): Record<string, unknown> {
+  private workerConfig(effort: string | null = null): Record<string, unknown> {
     return {
       mcp_servers: DELEGATED_CODEX_MCP_SERVERS,
       shell_environment_policy: buildCodexShellEnvironmentPolicy(this.toolPath),
+      ...(effort !== null ? { model_reasoning_effort: effort } : {}),
     };
+  }
+
+  /** Task override, then stored preference, then the adapter's configured model. */
+  modelSelectionFor(invocation: TaskInvocation, refresh = false): ModelSelection {
+    const pinned = refresh ? undefined : this.selections.get(invocation.task_id);
+    if (pinned) return pinned;
+    const selection = resolveModelSelection(invocation, {
+      ...(this.modelPreference ? { preference: this.modelPreference } : {}),
+      runnerDefault: { model: this.model ?? null, effort: null },
+    });
+    this.selections.set(invocation.task_id, selection);
+    if (this.selections.size > this.maxIdempotencyEntries) {
+      const oldest = this.selections.keys().next().value;
+      if (oldest !== undefined) this.selections.delete(oldest);
+    }
+    return selection;
   }
 
   private isExplicitlyStaleHandle(error: unknown): boolean {

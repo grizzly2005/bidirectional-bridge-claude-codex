@@ -1,8 +1,8 @@
 {
   "name": "bidirectional-bridge",
   "private": true,
-  "version": "0.4.0",
-  "description": "Experimental MCP coordination bridge for bounded bidirectional delegation between Claude Code and OpenAI Codex",
+  "version": "0.5.0",
+  "description": "Experimental MCP coordination bridge for bounded delegation between Claude Code, OpenAI Codex and Google Antigravity/Gemini",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,7 +15,8 @@
   "type": "module",
   "bin": {
     "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
-    "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs"
+    "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs",
+    "bridge-dashboard": "./scripts/bridge-dashboard.mjs"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -23,7 +24,8 @@
   "workspaces": [
     "shared/*",
     "claude/*",
-    "codex/*"
+    "codex/*",
+    "gemini/*"
   ],
   "scripts": {
     "build": "tsc --build && node scripts/build-tracking-ui.mjs",
@@ -38,7 +40,9 @@
     "skills:sync": "node scripts/sync-bridge-skill.mjs --write",
     "links:check": "node scripts/repair-workspace-links.mjs",
     "links:fix": "node scripts/repair-workspace-links.mjs --fix",
-    "live:claude": "node claude/claude-side/scripts/live-claude-delegation.mjs"
+    "live:claude": "node claude/claude-side/scripts/live-claude-delegation.mjs",
+    "dashboard": "node scripts/bridge-dashboard.mjs --open",
+    "install:antigravity": "node scripts/install-antigravity.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

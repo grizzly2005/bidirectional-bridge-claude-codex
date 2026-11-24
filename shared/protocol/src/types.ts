@@ -202,6 +202,13 @@ export interface TaskSpec {
   readonly max_turns?: number;
   /** Preserve business results independently from explicitly required measurements. */
   readonly telemetry_mode?: "operational" | "strict";
+  /**
+   * Optional per-task model slug for the target runtime (e.g. `opus`, `gemini-4-neon`).
+   * Overrides the persisted runtime preference; omitted means preference, then runtime default.
+   */
+  readonly model?: string;
+  /** Optional per-task reasoning effort for the target runtime (e.g. `high`). */
+  readonly effort?: string;
   readonly priority?: number;
   readonly tags?: readonly string[];
 }

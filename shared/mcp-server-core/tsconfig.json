@@ -5,6 +5,7 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../protocol" },
-    { "path": "../control-plane" }
+    { "path": "../control-plane" },
+    { "path": "../runner-adapter" }
   ]
 }

@@ -61,6 +61,10 @@ const taskSpecShape = z.object({
   tags: z.array(z.string()).optional(),
   telemetry_mode: z.enum(["operational", "strict"]).optional()
     .describe("Operational preserves delivered work with unknown metrics; strict requires accepted observation."),
+  model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/u).optional()
+    .describe("Optional model slug for the target runtime (e.g. 'opus', 'gemini-4-neon'). Overrides the stored runtime preference for this task only; omit for preference, then runtime default."),
+  effort: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/u).optional()
+    .describe("Optional reasoning effort for the target runtime (e.g. 'medium', 'high', 'xhigh')."),
 });
 
 const verificationShape = z.object({
@@ -118,6 +122,27 @@ const lineageArgs = {
     .describe("Immediate parent task. Child run/depth are validated against it."),
   delegation_depth: z.number().int().min(0).max(32).optional(),
 };
+
+/**
+ * Per-runtime sums of runtime-reported tokens over the returned records, so a manager
+ * balancing an explicit delegation share does not add numbers by hand. Unknown totals are
+ * counted separately and never estimated; the manager's own session is not included.
+ */
+export function telemetryByAgent(records: readonly { agent: string; total_tokens: number | null; input_tokens: number | null; output_tokens: number | null }[]):
+  Record<string, { attempts: number; total_tokens: number; input_tokens: number; output_tokens: number; attempts_without_total: number; share_of_known_total: number | null }> {
+  const rows: Record<string, { attempts: number; total_tokens: number; input_tokens: number; output_tokens: number; attempts_without_total: number; share_of_known_total: number | null }> = {};
+  for (const record of records) {
+    const row = rows[record.agent] ??= { attempts: 0, total_tokens: 0, input_tokens: 0, output_tokens: 0, attempts_without_total: 0, share_of_known_total: null };
+    row.attempts += 1;
+    if (record.total_tokens === null) row.attempts_without_total += 1;
+    else row.total_tokens += record.total_tokens;
+    row.input_tokens += record.input_tokens ?? 0;
+    row.output_tokens += record.output_tokens ?? 0;
+  }
+  const known = Object.values(rows).reduce((sum, row) => sum + row.total_tokens, 0);
+  for (const row of Object.values(rows)) row.share_of_known_total = known > 0 ? Math.round((row.total_tokens / known) * 10_000) / 10_000 : null;
+  return rows;
+}
 
 const who = (args: Record<string, unknown>, ctx: ToolContext): AgentId => {
   const supplied = args["agent"] as string | undefined;
@@ -757,7 +782,7 @@ export const TOOLS: readonly ToolDefinition[] = [
         ...(args["attempt"] !== undefined ? { attempt: args["attempt"] as number } : {}),
         limit: (args["limit"] as number | undefined) ?? 100,
       });
-      return { count: records.length, records };
+      return { count: records.length, records, by_agent: telemetryByAgent(records) };
     },
   },
   {

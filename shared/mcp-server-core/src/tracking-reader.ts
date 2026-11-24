@@ -18,7 +18,7 @@ export class TrackingError extends Error {
 const number = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 const member = (value: unknown, values: readonly string[]): string | null => typeof value === "string" && values.includes(value) ? value : null;
 // Never derive a label from spec.objective, paths, errors, prompts or artifact names.
-const agent = (value: unknown): string | null => member(value, ["claude", "codex", "bridge"]);
+const agent = (value: unknown): string | null => member(value, ["claude", "codex", "gemini", "bridge"]);
 const id = (value: unknown): string => typeof value === "string" && /^(?:task|run)_[0-9a-hjkmnp-tv-z]{10}$/u.test(value) ? value : "unknown";
 function json(value: unknown): Row {
   if (typeof value !== "string" || value.length > 64_000) return {};

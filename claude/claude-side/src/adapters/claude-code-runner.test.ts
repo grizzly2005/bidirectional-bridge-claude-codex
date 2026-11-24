@@ -442,15 +442,33 @@ describe("execution bounding", () => {
     expect(args).toContain("-p");
   });
 
-  it("does not accept a manager-supplied model or effort from the task contract", () => {
-    const r = fixtureRunner("ok");
-    const untrustedSpec = { ...spec(), model: "sonnet", effort: "low" } as TaskSpec;
-    const args = r.buildArgs(invocationFor({ spec: untrustedSpec }), "prompt");
+  it("selects model/effort from the task, then the stored preference, then the default", () => {
+    const taskArgs = fixtureRunner("ok").buildArgs(invocationFor({ spec: { ...spec(), model: "sonnet", effort: "low" } }), "prompt");
+    expect(taskArgs[taskArgs.indexOf("--model") + 1]).toBe("sonnet");
+    expect(taskArgs[taskArgs.indexOf("--effort") + 1]).toBe("low");
 
-    expect(args[args.indexOf("--model") + 1]).toBe(CLAUDE_REQUESTED_MODEL);
-    expect(args[args.indexOf("--effort") + 1]).toBe(CLAUDE_REQUESTED_EFFORT);
-    expect(args).not.toContain("sonnet");
-    expect(args).not.toContain("low");
+    const preferred = fixtureRunner("ok", { modelPreference: () => ({ model: "claude-opus-5-5", effort: null }) })
+      .buildArgs(invocationFor(), "prompt");
+    expect(preferred[preferred.indexOf("--model") + 1]).toBe("claude-opus-5-5");
+    expect(preferred[preferred.indexOf("--effort") + 1]).toBe(CLAUDE_REQUESTED_EFFORT);
+
+    const runtimeDefault = fixtureRunner("ok", { defaultProfile: { model: null, effort: null } }).buildArgs(invocationFor(), "prompt");
+    expect(runtimeDefault).not.toContain("--model");
+    expect(runtimeDefault).not.toContain("--effort");
+
+    const corrupt = fixtureRunner("ok", { modelPreference: () => ({ model: "--evil", effort: null }) }).buildArgs(invocationFor(), "prompt");
+    expect(corrupt[corrupt.indexOf("--model") + 1]).toBe(CLAUDE_REQUESTED_MODEL);
+    expect(() => fixtureRunner("ok").buildArgs(invocationFor({ spec: { ...spec(), model: "--evil" } as TaskSpec }), "prompt"))
+      .toThrow(/model slug/);
+  });
+
+  it("accepts any reported model under the runtime default and checks an explicit request", async () => {
+    const free = await runCapturing("wrongmodel", { defaultProfile: { model: null, effort: null } });
+    expect(free.error).toBeUndefined();
+    expect(free.telemetry[0]?.requested_model).toBeNull();
+    const pinned = await runCapturing("wrongmodel", { defaultProfile: { model: null, effort: null } },
+      { spec: { ...spec(), model: "opus" } });
+    expect((pinned.error as { code?: string } | undefined)?.code).toBe(ErrorCode.RUNTIME_PROFILE_MISMATCH);
   });
 
   it("refuses extra arguments that could replace the protected profile or turn ceiling", () => {

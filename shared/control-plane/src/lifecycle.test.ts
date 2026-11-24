@@ -91,11 +91,13 @@ describe("task creation", () => {
     }
   });
 
-  it("rejects manager attempts to add model or effort to a task contract", () => {
-    const attemptedOverride = { ...spec(), model: "sonnet", effort: "low" } as TaskSpec;
-    expect(() =>
-      cp.tasks.create({ spec: attemptedOverride, created_by: "claude" }),
-    ).toThrow(/validation/i);
+  it("accepts a validated per-task model/effort and rejects flag-shaped values", () => {
+    const selected = cp.tasks.create({ spec: { ...spec(), model: "claude-opus-5-5", effort: "high" }, created_by: "claude" });
+    expect(selected.spec.model).toBe("claude-opus-5-5");
+    expect(selected.spec.effort).toBe("high");
+    for (const bad of [{ model: "--dangerously-skip-permissions" }, { model: "a b" }, { effort: "HIGH" }, { effort: "-x" }]) {
+      expect(() => cp.tasks.create({ spec: { ...spec(), ...bad } as TaskSpec, created_by: "claude" })).toThrow(/validation/i);
+    }
   });
 });
 

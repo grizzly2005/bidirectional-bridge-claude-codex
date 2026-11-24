@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepositoryRoot = resolve(dirname(scriptPath), "..");
-const PACKAGES = ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "claude/claude-side", "codex/codex-side"];
+const PACKAGES = ["shared/protocol", "shared/control-plane", "shared/mcp-server-core", "shared/runner-adapter", "claude/claude-side", "codex/codex-side", "gemini/gemini-side"];
 const FINGERPRINT_DOMAIN = "bridge-runtime-fingerprint-v1";
 const MAX_DATABASE_BYTES = 128 * 1024 * 1024;
 const STATES = new Set(["PENDING", "CLAIMED", "WORKING", "VERIFYING", "BLOCKED", "DONE", "FAILED", "CANCELLED"]);

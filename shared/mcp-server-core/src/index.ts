@@ -2,7 +2,8 @@
  * `@bridge/mcp-server-core` — the agent-neutral MCP server for the coordination bridge.
  *
  * Claude and Codex both build their launcher on this package. It deliberately depends only
- * on `@bridge/protocol` and `@bridge/control-plane`; importing an agent-specific package
+ * on `@bridge/protocol`, `@bridge/control-plane` and the runtime-neutral `@bridge/runner-adapter`
+ * (model preferences); importing an agent-specific package
  * from here would re-create the asymmetry this package exists to remove.
  */
 
@@ -23,3 +24,6 @@ export { TrackingMcpServer } from "./tracking-server.js";
 export { TrackingCoordinator, TRACKING_RESOURCE_URI } from "./tracking.js";
 export { TrackingReader, TrackingError } from "./tracking-reader.js";
 export { TRACKING_TOOL_NAMES } from "./tracking-tools.js";
+export { openTrackingBrowser } from "./tracking-http.js";
+export { MODEL_HINTS, modelPreferenceTools } from "./model-tools.js";
+export { ModelPreferenceStore } from "@bridge/runner-adapter";

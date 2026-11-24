@@ -15,7 +15,7 @@ export const DIAGNOSTIC_SCHEMA_VERSION = 1;
 export const FINGERPRINT_DOMAIN = "bridge-runtime-fingerprint-v1";
 const PACKAGES = [
   "shared/protocol", "shared/control-plane", "shared/mcp-server-core",
-  "claude/claude-side", "codex/codex-side",
+  "shared/runner-adapter", "claude/claude-side", "codex/codex-side", "gemini/gemini-side",
 ] as const;
 const STATES = new Set(["PENDING", "CLAIMED", "WORKING", "VERIFYING", "BLOCKED", "DONE", "FAILED", "CANCELLED"]);
 const OBSERVATIONS = new Set(["PENDING", "COMPLETE", "INCOMPLETE", "REJECTED", "LEGACY_UNKNOWN"]);
@@ -216,7 +216,7 @@ export function bridgeDiagnostics(cp: ControlPlane, options: BridgeDiagnosticOpt
       observations_by_status: {}, last_event_id: null };
   }
   const adapters = cp.adapters.list().map((adapter) => ({
-    agent: ["codex", "claude", "bridge"].includes(adapter.info.agent) ? adapter.info.agent : "OTHER",
+    agent: ["codex", "claude", "gemini", "bridge"].includes(adapter.info.agent) ? adapter.info.agent : "OTHER",
     version: safeVersion(adapter.info.version),
     max_concurrency: Number.isInteger(adapter.info.max_concurrency) && adapter.info.max_concurrency > 0
       ? adapter.info.max_concurrency : null,
@@ -227,7 +227,7 @@ export function bridgeDiagnostics(cp: ControlPlane, options: BridgeDiagnosticOpt
   return {
     diagnostic_schema_version: DIAGNOSTIC_SCHEMA_VERSION, mode: "live" as const, observed_at: Date.now(),
     process: { pid: process.pid, node_version: process.versions.node, platform: process.platform },
-    caller: options.caller && ["codex", "claude", "bridge"].includes(options.caller) ? options.caller : "OTHER",
+    caller: options.caller && ["codex", "claude", "gemini", "bridge"].includes(options.caller) ? options.caller : "OTHER",
     delegation: options.delegationPolicy === "allow" || options.delegationPolicy === "deny" ? options.delegationPolicy : "unknown",
     identity: { capture: identity, current_disk: current, changed_since_start: changes,
       restart_required: knownChanges ? true : runtimeKnown ? false : null },

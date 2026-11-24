@@ -20,13 +20,15 @@ export default defineConfig({
       "@bridge/web-audit": at("./shared/web-audit/src/index.ts"),
       "@bridge/control-plane": at("./shared/control-plane/src/index.ts"),
       "@bridge/mcp-server-core": at("./shared/mcp-server-core/src/index.ts"),
+      "@bridge/runner-adapter": at("./shared/runner-adapter/src/index.ts"),
       "@bridge/claude-side": at("./claude/claude-side/src/index.ts"),
       "@bridge/codex-side": at("./codex/codex-side/src/index.ts"),
+      "@bridge/gemini-side": at("./gemini/gemini-side/src/index.ts"),
     },
   },
   test: {
-    // Each agent owns its own test tree; a single `npm test` at the root covers both sides.
-    include: ["shared/**/*.test.ts", "claude/**/*.test.ts", "codex/**/*.test.ts"],
+    // Each agent owns its own test tree; a single `npm test` at the root covers every side.
+    include: ["shared/**/*.test.ts", "claude/**/*.test.ts", "codex/**/*.test.ts", "gemini/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
     environment: "node",
     // Deterministic: no parallel SQLite contention across files.

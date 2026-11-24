@@ -35,6 +35,8 @@ const PACKAGES = {
   "claude-side": "claude/claude-side",
   "codex-side": "codex/codex-side",
   "web-audit": "shared/web-audit",
+  "runner-adapter": "shared/runner-adapter",
+  "gemini-side": "gemini/gemini-side",
 };
 
 const log = (...a) => console.error(...a);

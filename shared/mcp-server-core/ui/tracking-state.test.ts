@@ -226,3 +226,20 @@ describe("tracking projection and display boundaries", () => {
     expect(hasActiveTasks({ tasks: [task({ state: "BLOCKED", execution_phase: "QUARANTINED" })] })).toBe(false);
   });
 });
+
+describe("token share by runtime", () => {
+  it("sums reported totals per agent, counts unknown attempts and never estimates", async () => {
+    const { tokenShareByRuntime } = await import("./tracking-state.mjs");
+    const rows = tokenShareByRuntime({ attempts: [
+      { agent: "codex", telemetry: { total_tokens: 300 } },
+      { agent: "gemini", telemetry: { total_tokens: 100 } },
+      { agent: "gemini", telemetry: { total_tokens: null } },
+      { agent: "codex", telemetry: null },
+    ] });
+    expect(rows).toEqual([
+      { agent: "codex", total_tokens: 300, attempts: 2, unknown_attempts: 1, share: 0.75 },
+      { agent: "gemini", total_tokens: 100, attempts: 2, unknown_attempts: 1, share: 0.25 },
+    ]);
+    expect(tokenShareByRuntime(null)).toEqual([]);
+  });
+});

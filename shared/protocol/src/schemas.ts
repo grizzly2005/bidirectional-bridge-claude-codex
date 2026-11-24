@@ -75,6 +75,16 @@ export const TaskSpecSchema: JsonSchema = {
       description: "Finite runtime turn ceiling; omitted tasks use the conservative runtime default.",
     },
     telemetry_mode: { type: "string", enum: ["operational", "strict"] },
+    model: {
+      type: "string",
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$",
+      description: "Per-task model slug for the target runtime; overrides the stored runtime preference.",
+    },
+    effort: {
+      type: "string",
+      pattern: "^[a-z][a-z0-9_-]{0,31}$",
+      description: "Per-task reasoning effort for the target runtime, e.g. low, medium, high, xhigh, max.",
+    },
     priority: { type: "integer", minimum: 0, maximum: 100 },
     tags: { type: "array", items: { type: "string", maxLength: 64 }, maxItems: 32 },
   },

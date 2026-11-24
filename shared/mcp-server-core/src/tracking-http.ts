@@ -17,7 +17,10 @@ export class TrackingHttpServer {
   private server?: Server;
   private origin?: string;
   private starting?: Promise<string>;
-  constructor(private readonly tracking: TrackingCoordinator) {}
+  /** `port` 0 (default) picks an ephemeral loopback port; a fixed port is still loopback-only. */
+  constructor(private readonly tracking: TrackingCoordinator, private readonly port = 0) {
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new TrackingError("BROWSER_UNAVAILABLE");
+  }
   start(): Promise<string> {
     if (this.origin) return Promise.resolve(this.origin);
     if (this.starting) return this.starting;
@@ -58,7 +61,7 @@ export class TrackingHttpServer {
       }
     });
     server.requestTimeout = 10_000; server.headersTimeout = 10_000;
-    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); }); });
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(this.port, "127.0.0.1", () => { server.off("error", reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === "string") { server.close(); throw new TrackingError("BROWSER_UNAVAILABLE"); }
     this.server = server; this.origin = `http://127.0.0.1:${address.port}`;
