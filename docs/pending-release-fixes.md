@@ -1,5 +1,9 @@
 # Correctifs en attente de release
 
+> 2026-11-24 : les deux correctifs ci-dessous sont regroupés dans la version candidate
+> [0.5.0](releases/v0.5.0.md) sur la base `v0.4.0`. Les limites de validation de chaque fiche
+> restent valables.
+
 Ce registre conserve les correctifs locaux à regrouper dans une prochaine release demandée
 par l'utilisateur. Chaque correctif possède un identifiant stable et une entrée dans
 `CHANGELOG.md`, sous `Unreleased`. Les prochains correctifs s'ajoutent au tableau et reçoivent
@@ -8,8 +12,8 @@ release, renseigner la version et son lien pour les seuls correctifs effectiveme
 
 | Identifiant | Date | Correctif | État | Release |
 | --- | --- | --- | --- | --- |
-| [BRIDGE-FIX-20261014-01](#bridge-fix-20261014-01) | 2026-10-14 | Conserver un compte rendu Claude refusé et permettre sa correction sur le même enfant | Validé localement : compilation et 674/674 tests | En attente |
-| [BRIDGE-FIX-20261022-01](#bridge-fix-20261022-01) | 2026-10-22 | Lancer le worker Codex sous WSL depuis un bridge Windows sur workspace UNC | Porté sur 0.4.0 ; tests simulés ; tour modèle non validé, voir fiche | En attente |
+| [BRIDGE-FIX-20261014-01](#bridge-fix-20261014-01) | 2026-10-14 | Conserver un compte rendu Claude refusé et permettre sa correction sur le même enfant | Validé localement : compilation et 674/674 tests | [0.5.0](releases/v0.5.0.md) |
+| [BRIDGE-FIX-20261022-01](#bridge-fix-20261022-01) | 2026-10-22 | Lancer le worker Codex sous WSL depuis un bridge Windows sur workspace UNC | Porté sur 0.4.0 ; tests simulés ; tour modèle non validé, voir fiche | [0.5.0](releases/v0.5.0.md) |
 
 ## BRIDGE-FIX-20261014-01
 

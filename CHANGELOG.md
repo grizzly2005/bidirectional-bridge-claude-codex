@@ -11,6 +11,45 @@ explicitly.
 
 ## Unreleased
 
+No changes recorded yet.
+
+## 0.5.0 — 2026-11-24 (candidate)
+
+Package/runtime 0.5.0, wire 1.5.0 (additive), SQLite schema 6 unchanged. See
+[the release notes](docs/releases/v0.5.0.md).
+
+### Added
+
+- **Gemini / Google Antigravity runtime** (`@bridge/gemini-side`): `agy -p --output-format
+  stream-json` worker with session capture and same-conversation resume, read-only plan
+  mode for `(no-write)` tasks, process-tree stop evidence, structured result gate,
+  runtime-reported token telemetry and a legacy Gemini CLI dialect. `--caller gemini` for
+  Antigravity managers and `scripts/install-antigravity.mjs` for `.agents/mcp_config.json`.
+  The worker is opt-in (`--gemini-auth api-key|enterprise`) because Google does not support
+  third-party agents driving a consumer Antigravity login.
+- **Model selection**: optional `TaskSpec.model` / `effort`, workspace-wide
+  `bridge_set_model_preference` / `bridge_get_model_preferences` shared by every manager;
+  workers use their runtime default otherwise.
+- **Delegation share** guidance in `using-bridge`: an explicit user share (e.g. 50 %) is a
+  token target met by moving real token-heavy work to other subscriptions, measured with the
+  new `by_agent` summary of `bridge_query_telemetry`.
+- **Localhost dashboard** (`npm run dashboard`, `bridge-dashboard`), optional fixed loopback
+  port, and a “Tokens délégués par runtime” panel in the tracking view.
+- `@bridge/runner-adapter`: the runtime-neutral adapter extracted from the Claude adapter
+  (diagnostics unchanged) plus shared contract and model-selection helpers.
+- Delegated workers receive `BRIDGE_DELEGATED_WORKER=1`; the native launcher refuses to
+  start under it.
+
+### Changed
+
+- Native Claude workers now use Claude Code's default model unless a task or a stored
+  preference selects one (previously always `opus`/`high`). Embedders that construct
+  `ClaudeCodeRunner` without `defaultProfile` keep `opus`/`high`.
+- Dependencies: MCP SDK 1.32.2, zod 4.6.7, `@openai/codex` 0.172.0, vitest 5.1.1 (vite 8),
+  Playwright 1.65.1, setup-node v7.1.0, upload-artifact v7.0.2; lockfile regenerated,
+  `npm audit` clean. ext-apps 2.x (needs MCP SDK v2) and TypeScript 7 (drops `baseUrl`) are
+  deliberately held back.
+
 ### Fixed
 
 - Preserve Claude final results rejected for inconsistent verification as durable candidate

@@ -12,7 +12,7 @@ Use the live MCP schema as the final authority. Load this map only when the exac
 | `bridge_claim_task` | Atomically own the root. Claiming is not write permission. |
 | `bridge_set_state` | Move the owned root to `WORKING`. |
 | `bridge_acquire_lease` | Acquire scope before manager file writes. Delegated child leases are automatic. |
-| `bridge_delegate` | Create and execute one bounded child through the opposite runtime. |
+| `bridge_delegate` | Create and execute one bounded child through another runtime (`claude`, `codex` or `gemini`). `spec.model` / `spec.effort` optionally select its model. |
 | `bridge_submit_deliverable` | Finalize the owned root with structured result and real verification. |
 | `bridge_release_lease` | Release a manually acquired manager lease. |
 
@@ -31,6 +31,13 @@ Use the live MCP schema as the final authority. Load this map only when the exac
 | `bridge_block_task` | Block an owned task honestly. Never block another owner’s child. |
 | `bridge_add_dependency` | Add a dependency to a task the agent controls; cycles are rejected. |
 | `bridge_snapshot` | Inspect counts, ready tasks, adapters, and live leases when concurrency matters. |
+
+## Model selection
+
+| Tool | Use |
+|---|---|
+| `bridge_get_model_preferences` | Show the stored model/effort per runtime, the precedence and dated hints. |
+| `bridge_set_model_preference` | On explicit request, set or clear (`null`) the model/effort a runtime uses for the next attempts. |
 
 ## Optional visual observation
 
@@ -55,7 +62,7 @@ Read [tracking-ui.md](tracking-ui.md) for observation-only ChatGPT connections a
 | `bridge_continue_task` | Continue the same prelaunch contention-blocked task with a required stable continuation key and its original budget; no runtime handle is needed. |
 | `bridge_repair_observation` | Seal the stored validated observation draft as owner or proven direct manager; no supplied metrics and no model call. |
 | `bridge_read_events` | Page with `next_cursor` as `after` and a stable `task_id`; `has_more` signals another page. `head_event_id` and legacy `last_event_id` are global heads, not pagination cursors. |
-| `bridge_query_telemetry` | Query final attempt telemetry after completion when requested or diagnosing. |
+| `bridge_query_telemetry` | Query final attempt telemetry after completion when requested, diagnosing, or balancing an explicit delegation share; `by_agent` sums reported tokens per runtime. |
 | `bridge_set_execution_handle` | Owner-only manual plumbing for a current open attempt; cannot overwrite a closed attempt or the fenced callback of an active orchestrated execution. |
 | `bridge_get_execution_handle` | Owner-only sensitive debug access; never expose the value. Managers recover through lineage instead. |
 

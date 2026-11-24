@@ -6,7 +6,10 @@ boundaries, the persisted schema, and the tool surface may change; see
 
 ## Context
 
-The bridge coordinates Claude Code and Codex while both work in one local repository. It
+The bridge coordinates Claude Code, Codex and Gemini (Google Antigravity) while they work in
+one local repository. Since 0.5.0 a third native process (`caller=gemini`, configured in
+`.agents/mcp_config.json`) and a third adapter (`@bridge/gemini-side`, driving `agy -p`) give
+six logical delegation directions; few are active per task. It
 does not choose the better model or merge code automatically. Its job is to make ownership,
 write scope, task lineage, verification, and recovery explicit.
 
@@ -14,12 +17,16 @@ write scope, task lineage, verification, and recovery explicit.
 flowchart LR
   Claude[Claude Code] -->|.mcp.json / stdio| ClaudeMCP[Native bridge process\ncaller=claude]
   Codex[Codex] -->|.codex/config.toml / stdio| CodexMCP[Native bridge process\ncaller=codex]
+  Antigravity[Antigravity / agy] -->|.agents/mcp_config.json / stdio| GeminiMCP[Native bridge process\ncaller=gemini]
   ClaudeMCP --> Core[MCP server core]
   CodexMCP --> Core
+  GeminiMCP --> Core
   Core --> CP[Control plane]
   CP --> DB[(Local SQLite state)]
   ClaudeMCP --> ClaudeAdapter[Claude adapter]
   CodexMCP --> CodexAdapter[Codex adapter]
+  ClaudeMCP --> GeminiAdapter[Gemini adapter]
+  GeminiAdapter --> AgyCLI[Antigravity CLI agy -p\nopt-in: API key / Enterprise]
   ClaudeAdapter --> ClaudeCLI[Claude Code CLI]
   CodexAdapter --> CodexRuntime[Codex App Server or MCP client]
 ```
@@ -35,10 +42,13 @@ processes coordinate through the same repository-local SQLite database.
   telemetry, and SQLite persistence; depends only on the protocol.
 - `@bridge/mcp-server-core`: agent-neutral MCP tools and lifecycle; depends on the protocol
   and control plane, never an agent-specific package.
-- `@bridge/claude-side` and `@bridge/codex-side`: runtime-specific adapters. Neither imports
-  the other.
+- `@bridge/runner-adapter`: runtime-neutral adapter for headless CLI runners (admission,
+  cancellation with stop evidence, telemetry projection, honesty gate) plus model selection
+  and the workspace model-preference store; depends only on the protocol.
+- `@bridge/claude-side`, `@bridge/codex-side` and `@bridge/gemini-side`: runtime-specific
+  adapters. None imports another.
 - `scripts/native-bridge-mcp.mjs`: the project-scoped composition root that combines the
-  neutral core with both adapters.
+  neutral core with the three adapters and the model-preference tools.
 
 ## Main data flow
 

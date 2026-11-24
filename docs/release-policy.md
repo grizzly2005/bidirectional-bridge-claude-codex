@@ -60,9 +60,10 @@ release reference. A locally validated fix does not itself authorize a release o
 The release/0.4.0 branch is a versioned candidate. Local certification hashes its public
 material; it does not certify production readiness or change the published v0.3.1 assets.
 The [v0.4.0 notes](releases/v0.4.0.md) document package/runtime0.4.0, wire1.4.0 and SQLite6.
+The [v0.5.0 notes](releases/v0.5.0.md) document package/runtime0.5.0, wire1.5.0 and SQLite6.
 The web-audit module currently retains its independent 0.1.0 version; packaging verifies
 each workspace against its own lockfile entry and checks internal dependency versions.
-Source and compiled archives include all six workspaces, memory tutorials and client skill
+Source and compiled archives include all eight workspaces (0.5.0), memory tutorials and client skill
 mirrors. Separate canonical archives are produced for `using-bridge` and `bridge-web-audit`.
 
 A checkpoint is only prepared after these gates pass locally, with real exit codes:

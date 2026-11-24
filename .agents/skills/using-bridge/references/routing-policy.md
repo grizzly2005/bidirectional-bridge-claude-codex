@@ -33,13 +33,23 @@ Route according to task fit, not quota consumption.
 - reviewing unsupported or overstated claims
 - independent review of substantial implementation work
 
+### Prefer Gemini (Antigravity) for
+
+- reading and summarizing very large code or documentation sets (1M-token context)
+- a third, independent read-only review when Claude and Codex already disagree or share a blind spot
+- fast iteration on settled changes, test writing and conversion scripts (Hydrogen)
+- complex implementation or analysis when another subscription should absorb the work (Neon;
+  Carbon for long-horizon verification on Ultra)
+
+See [model-catalog.md](model-catalog.md) for model roles.
+
 ### Cross-runtime review
 
 For substantial implementation work, consider one bounded read-only review by the other
 runtime.
 
 For substantial security or architecture work, consider bounded implementation or
-reproducibility verification by the other runtime.
+reproducibility verification by another runtime.
 
 ## Delegation amount
 
@@ -47,15 +57,20 @@ For substantial work:
 
 - prefer one useful bounded child when an independent verifiable subtask exists;
 - allow a second child when it is genuinely independent or is a separate read-only review;
-- do not exceed two children by default.
+- do not exceed two children by default;
+- an explicit user delegation share overrides this cap as described in the skill section
+  "Honor an explicit delegation share".
 
 For trivial or tightly coupled work, keep the task local.
 
-## Never route based on
+## Never route based on (unless the user explicitly asks)
 
 - daily usage percentages
 - remaining quota
 - a goal of "using both models"
+
+An explicit user-requested delegation share ("délègue 50 %") is the user's own decision
+about their subscriptions; follow it by moving real work, never by wasting tokens.
 - automatic web searches for model rankings
 - automatic benchmark execution
 

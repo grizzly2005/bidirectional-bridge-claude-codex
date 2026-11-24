@@ -31,7 +31,7 @@ Load this reference only when constructing an unfamiliar delegation payload or v
 }
 ```
 
-Swap `to` for the opposite runtime. Preserve the actual root run, parent, and depth. Omit caller identity because the server binds it at startup.
+Set `to` to another runtime (`claude`, `codex` or `gemini`). Preserve the actual root run, parent, and depth. Omit caller identity because the server binds it at startup.
 
 ## Worker result
 

@@ -1,14 +1,15 @@
-# Claude Code ↔ Codex coordination bridge
+# Claude Code ↔ Codex ↔ Gemini coordination bridge
 
 > **Status: Experimental · Pre-1.0 · under active development · not production-certified.**
 > This is an experimental open-source project. APIs, MCP tool shapes, persisted state,
 > and workflows may change without notice and without a migration path. Use it only in
 > trusted local repositories on work you can review.
 
-A local, repository-scoped coordination bridge that lets **Claude Code** and **Codex** work in
-the same checkout without stepping on each other. It gives both agents one shared control
-plane for tasks, ownership, write-scope leases, artifacts, verification evidence, recovery,
-and runtime telemetry, exposed to each client as a native project-scoped MCP server.
+A local, repository-scoped coordination bridge that lets **Claude Code**, **Codex** and
+**Gemini (Google Antigravity)** work in the same checkout without stepping on each other. It
+gives every agent one shared control plane for tasks, ownership, write-scope leases,
+artifacts, verification evidence, recovery, and runtime telemetry, exposed to each client as a
+native project-scoped MCP server.
 
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
@@ -16,6 +17,14 @@ automatically, or merge code for you.
 The latest published checkpoint is [v0.3.1](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.3.1).
 See the [release notes](docs/releases/v0.3.1.md) for durable execution, schema-v4 migration,
 opt-in delegation tracking, downloads and verification.
+
+**v0.5.0** ([notes](docs/releases/v0.5.0.md)) adds Gemini/Antigravity as a third runtime
+(six delegation directions, sparse by default), manager-selectable models per runtime
+(runtime defaults unless changed), an explicit delegation-share workflow in the skill, a
+read-only localhost dashboard (`npm run dashboard`) with delegated tokens per runtime, the
+pending local fixes BRIDGE-FIX-20261014-01 and BRIDGE-FIX-20261022-01, and current
+dependencies. The Gemini *worker* is opt-in (`--gemini-auth api-key|enterprise`): Google
+does not support third-party agents driving a consumer Antigravity login.
 
 The [v0.4.0 candidate](docs/releases/v0.4.0.md) adds
 [web-audit assistance and bridge reliability fixes](docs/web-audit-experimental.md)
@@ -368,14 +377,28 @@ is confirmed once per native session, and `bridge_snapshot` is used only when co
 ownership is plausible. If the target runtime is unavailable, report the runtime failure —
 do not create a replacement child task.
 
-### Claude worker profile
+### Worker models (0.5.0)
 
-The **bridge runtime**, not the manager and not the skill, owns Claude model selection. Every
-bridge-created Claude worker — fresh or resumed — is launched through Claude Code's supported
-interface with `--model opus --effort high`. A delegation payload cannot override that
-profile. If Claude Code reports an actual non-Opus model, the attempt fails with
-`RUNTIME_PROFILE_MISMATCH`; if it reports no model at all, telemetry keeps the actual model
-`null` rather than inventing one.
+Every worker — Claude, Codex or Gemini — uses its **runtime's default model** unless a manager
+changes it. From any client, `bridge_set_model_preference` stores a model and/or effort per
+runtime for the workspace (for example `claude` → `opus`, `gemini` → `gemini-4-neon`) and it
+applies from the next attempt; `null` restores the default. A single delegation can set
+`spec.model` / `spec.effort` instead. When a model was requested and the runtime reports a
+different one, the attempt fails with `RUNTIME_PROFILE_MISMATCH`. See
+[the model catalog](skills/using-bridge/references/model-catalog.md).
+
+### Gemini / Google Antigravity (0.5.0)
+
+- **Antigravity as manager** (App, IDE or `agy`): run `npm run install:antigravity -- --workspace <project>`
+  to write `<project>/.agents/mcp_config.json` (machine-local, git-ignored), reload MCP, and
+  check `bridge_server_info` reports `caller=gemini`. The `using-bridge` skill is read from
+  `.agents/skills/`. This is how a Google AI Pro/Ultra plan is used with the bridge.
+- **Gemini as worker**: start the bridge with `--gemini-auth api-key` (Google AI Studio key in
+  `GEMINI_API_KEY` and `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`)
+  or `--gemini-auth enterprise`. Without it the worker stays disabled, because Google's
+  Antigravity FAQ does not support Claude Code/Codex driving a consumer login and reports
+  account suspensions for it. Add the flag to the Claude/Codex MCP configuration args.
+- Live dashboard for any client: `npm run dashboard` (read-only, `127.0.0.1` only).
 
 Claude turn ceilings are finite: minimum 1, conservative default 12, maximum 64, with 32 as
 the recommended starting value for a bounded repository audit. Set `TaskSpec.max_turns` only

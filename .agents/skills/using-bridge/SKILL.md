@@ -1,11 +1,23 @@
 ---
 name: using-bridge
-description: Coordinate Claude Code and Codex through the repository-local bridge MCP for substantial multi-file implementation, security or architecture review, nontrivial diagnosis, verification, recovery, and bounded independent review. Use when the user asks for the bridge or another runtime, or when a substantial task has a useful separable child. Keep trivial, one-command, tightly coupled, or explicitly single-agent work local.
+description: Coordinate Claude Code, Codex and Gemini (Google Antigravity) through the repository-local bridge MCP for substantial multi-file implementation, security or architecture review, nontrivial diagnosis, verification, recovery, and bounded independent review. Use when the user asks for the bridge, another runtime, a delegation share such as "délègue 50 %", or a model change for a runtime, or when a substantial task has a useful separable child. Keep trivial, one-command, tightly coupled, or explicitly single-agent work local.
 ---
 
 # Use the Bridge
 
 Use the bridge as a coordination layer, not as a reason to involve another agent. Keep the current native client responsible for the user request; delegate only a bounded subtask whose expected value exceeds startup, context, and verification overhead.
+
+Three runtimes can be managers or workers: `claude` (Claude Code), `codex` (Codex) and
+`gemini` (Google Antigravity CLI `agy`, or legacy Gemini CLI). Delegate with
+`bridge_delegate` `to` set to one of the others; never to your own runtime or an ancestor.
+
+The Gemini **worker** runs only when the bridge was started with `--gemini-auth api-key`
+(Google AI Studio key) or `--gemini-auth enterprise`. Google does not support driving a
+consumer Antigravity login (Free/Pro/Ultra) from Claude Code, Codex or other third-party
+agents and reports suspensions for it; never work around this. A Google AI Pro/Ultra plan is
+used by running **Antigravity as the manager** with this bridge MCP and delegating to Claude or
+Codex. If a Gemini delegation returns the “Gemini worker disabled” blocker, report it and
+choose another runtime; do not retry it.
 
 ## Choose the path
 
@@ -13,11 +25,13 @@ Use the bridge as a coordination layer, not as a reason to involve another agent
 `node scripts/sync-bridge-skill.mjs --write`; check them with `--check`.
 Edit the source rather than a client mirror.
 
-- **Delegate:** assign one independent, verifiable subtask to the other runtime.
-- **Review:** ask the other runtime for a bounded, usually read-only, independent review.
+- **Delegate:** assign one independent, verifiable subtask to another runtime.
+- **Review:** ask another runtime for a bounded, usually read-only, independent review.
 - **Recover:** resume one known stranded task in place after quota, timeout, crash, or process interruption.
 - **Observe:** inspect telemetry or events only when the user requests them, during dogfooding, or for diagnosis.
 - **Track visually:** on a request such as “active le suivi de délégation”, open the opt-in view before a blocking delegation; read [tracking-ui.md](references/tracking-ui.md).
+- **Balance a share:** on an explicit delegation share (“délègue 50 %”, “moitié pour Codex”), follow [Honor an explicit delegation share](#honor-an-explicit-delegation-share).
+- **Change models:** on an explicit model request (“pour Claude passe en opus 5.5”), follow [Select models](#select-models).
 - **Do not use the bridge:** complete trivial, tightly coupled, or cheaper single-agent work locally.
 
 If native bridge tools are absent, report that limitation and use read-only offline sources
@@ -37,7 +51,7 @@ Delegate only when all are true:
 1. The child task is independently understandable from a compact contract.
 2. Its write scope is disjoint, or it is read-only.
 3. Its output and verification criteria are explicit.
-4. The other runtime adds distinct implementation, diagnosis, review, or research value.
+4. The target runtime adds distinct implementation, diagnosis, review, or research value.
 5. The manager can consume and verify the result without prolonged back-and-forth.
 
 Do not delegate:
@@ -70,12 +84,77 @@ Treat work as substantial when one or more apply:
 When a substantial task contains an independently understandable, verifiable,
 non-overlapping subtask, prefer one bounded child instead of keeping the entire request with
 the manager. A second child is allowed by default only for a truly independent scope or a
-separate read-only final review. Do not exceed two children by default, and treat an exact
-user-requested delegation count as a hard limit.
+separate read-only final review. Do not exceed two children by default — an explicit
+delegation share may require more — and treat an exact user-requested delegation count as
+a hard limit.
 
 Read [routing-policy.md](references/routing-policy.md) when making a nontrivial routing decision. Do not rerun
 benchmarks, search for model rankings, route from quota consumption, or delegate merely to
-achieve a usage percentage during ordinary work.
+achieve a usage percentage during ordinary work. The single exception is a share the user
+explicitly requests; it is governed by the next section, not by your own initiative.
+
+## Honor an explicit delegation share
+
+When the user states a delegation share — “délègue les tâches à 50 %”, “fais faire la
+moitié à Codex”, “30 % pour Gemini” — the share is a **token target**, not a task count:
+by the end of the request, the tokens consumed by delegated workers must be about that
+fraction of the total (50 % means the children together consume about as many tokens as
+the manager session). The purpose is to use the user's separate subscription limits
+(Claude, ChatGPT/Codex, Google AI) instead of exhausting the manager's. Pay close attention:
+delegating many small tasks while the manager does the expensive reading, build/test loops
+and rewrites does **not** meet the share.
+
+1. **Confirm the target once.** Restate the share and the target runtime(s) in one line.
+   If the user named none, choose a runtime on a *different* subscription from the manager
+   (manager Claude → Codex; manager Codex → Claude; manager Antigravity → Claude or Codex).
+   Delegate to `gemini` only when its worker is enabled (API key or Enterprise); a Gemini API
+   key is billed per use and does not draw on a Google AI Pro/Ultra plan. The share stays in force for the whole request until the user changes it.
+2. **Plan by consumption, before working.** Split the request into independent,
+   verifiable chunks with disjoint write scopes. Weight each chunk by what consumes tokens:
+   files and documentation to read, size of changes, number of build/test/fix iterations,
+   breadth of an audit. Assign chunks so the delegated weight matches the share.
+3. **Move the expensive work, keep the cheap control.** Give children the token-heavy
+   parts: broad codebase reading, implementation of whole modules, repeated test/fix loops,
+   test writing, exhaustive reviews or audits, large refactors. Keep decomposition,
+   integration and verification on the manager, and verify cheaply (diff review, run the
+   tests) rather than re-reading everything the child read.
+4. **Lift the default child cap only as far as the share needs.** The default limit of two
+   children does not apply to an explicit share; use as many bounded, non-overlapping
+   children (sequential waves when scopes depend on each other) as the share requires. An
+   exact delegation count from the user, the depth limit, leases and every other rule still
+   apply. Give each child a realistic `deadline_ms` and `spec.max_turns` for its real size.
+5. **Measure after each child.** Call `bridge_query_telemetry` once with the root `run_id`
+   and read `by_agent`: it sums the runtime-reported `total_tokens` per delegated runtime.
+   The bridge does not measure the interactive manager session. Use the manager client's
+   own usage display when available (Claude Code `/usage` or `/cost`, Codex `/status`,
+   Antigravity `/usage`) or the user's figure; otherwise state that the manager side is an
+   estimate from work volume. Never invent token numbers.
+6. **Rebalance with real work only.** If the delegated share is below target and
+   substantial work remains, delegate the next eligible chunk instead of doing it locally;
+   if it is above target, keep the next chunk local. Never pad prompts, duplicate a task,
+   inflate turn budgets, ask for useless re-reads or delegate make-work to burn tokens:
+   that wastes the user's limits instead of using them.
+7. **Report the outcome.** At the end give the measured delegated tokens per runtime,
+   the manager figure with its source or “non mesuré”, achieved versus target share, and
+   any chunk kept local with the reason. The localhost dashboard shows “Tokens délégués par
+   runtime” for the same run.
+
+## Select models
+
+Each worker uses its **runtime's default model** unless told otherwise. Do not change
+models on your own initiative.
+
+- On a request such as “pour Claude passe en opus 5.5” or “Gemini en Neon”, call
+  `bridge_set_model_preference` with `runtime` (`claude`, `codex` or `gemini`) and the
+  `model` and/or `effort` slug. It is stored for the workspace, shared by every manager
+  (Claude, Codex or Antigravity), and applies to the next delegated attempt. `null` restores
+  the runtime default. Confirm the stored value from the tool result.
+- For one task only, put `model` / `effort` in that child's `spec` instead.
+- Precedence: `spec.model`/`spec.effort` > stored preference > runtime default.
+- `bridge_get_model_preferences` shows the current values and dated hints. The runtime is
+  the authority on slugs (`claude --help`, Codex `/model`, `agy models`); an unknown slug
+  fails the attempt instead of falling back. Read [model-catalog.md](references/model-catalog.md)
+  for runtime roles and model choices.
 
 ## Fast path for bounded children
 
@@ -115,7 +194,7 @@ Use `spec.telemetry_mode: "operational"` for ordinary work (the default). Select
 only when accepted measurements are an explicit completion criterion. A strict observation
 failure can coexist with a completed business result; inspect both before acting.
 
-The bridge runtime owns Claude model/effort selection; managers must not override it.
+Model and effort follow [Select models](#select-models); leave them unset for the runtime default.
 
 Preserve the root `run_id`, set `parent_task_id` to the root task, and set child depth to parent depth plus one. Never pass full chat history when a compact task contract and artifact references suffice.
 
@@ -154,15 +233,15 @@ The server enforces core invariants, but shell access is not an OS-level scope s
 ## Prevent loops and duplication
 
 - Use one bounded request and one structured answer.
-- Never substitute a direct Claude or Codex invocation for `bridge_delegate`.
+- Never substitute a direct Claude, Codex, `agy` or `gemini` invocation for `bridge_delegate`.
 - Never delegate to an agent already in the active ancestor chain.
 - A delegated worker must not delegate recursively unless its explicit bounded contract permits
   that safe action.
 - Do not create a sibling replacement because a child is slow, blocked, quota-limited, or interrupted.
 - Do not redo a delegated task while it is active.
 - Decompose broad repository-wide work into bounded subtasks when possible instead of relying on an extreme turn budget.
-- Do not exceed two children by default, the user’s requested delegation count, or the bridge
-  depth limit.
+- Do not exceed two children by default (an explicit delegation share may require more), the
+  user’s requested delegation count, or the bridge depth limit.
 
 ## Handle results honestly
 
@@ -186,8 +265,8 @@ is retained, but old rows without a known attempt do not certify a new attempt.
 
 When starting or resuming work that needs continuity, call `memory_get_context` for the
 explicit project/program, namespace, branch, application version and evidence epoch.
-The native manager performs these MCP calls. Delegated Codex workers have the project bridge
-MCP disabled; load a useful context as manager, publish a compact input artifact, and persist
+The native manager performs these MCP calls. Delegated workers (Codex, Claude, Gemini) do not
+use the project bridge MCP; load a useful context as manager, publish a compact input artifact, and persist
 the returned working deltas under the manager's own task with references to the worker output.
 Request only the useful notes with a bounded byte budget. Keep the database/scope and
 `change_cursor` together; use `memory_get_changes` at handoff or resumption for deltas.
@@ -205,6 +284,12 @@ references in the note. Memory cannot confirm a finding or modify campaign JSON.
 investigation needs its reason, tested conditions and reopening trigger. Read
 [shared-memory.md](references/shared-memory.md) for exact payloads, cursor pagination,
 oversized-note handling and restart verification.
+
+For an independent review, give the reviewer the objective, base revision, diff/artifacts and
+tests, but not the author's reasoning or verdict; share those only after its first pass and
+only to resolve a disagreement. Agreement between runtimes is a weak signal: executed tests,
+reproducible artifacts and invariants decide. Bring in a third runtime only on disagreement,
+security-sensitive changes, ambiguous tests or a stalled child — not on every task.
 
 For reviews, separate a demonstrated blocker from a nonblocking remark or future proposal.
 Tie findings to the inspected revision and preserve useful counterexamples. After two cycles

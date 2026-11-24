@@ -28,6 +28,11 @@ For ChatGPT connected through a private MCP tunnel, use the independent
 worker adapter or recovery operation. Connecting a viewer does not make it a manager.
 Never tunnel the privileged native coordination server just to display tracking.
 
+For any client without MCP Apps rendering — Antigravity/Gemini, a terminal-only session —
+the user can run `npm run dashboard` (or `node scripts/bridge-dashboard.mjs --workspace <project>
+--open`) in the bridge checkout: a read-only localhost page that follows the latest run and
+shows “Tokens délégués par runtime”. Suggest it; do not start it yourself unless asked.
+
 If tools or host rendering are unavailable, report the missing capability accurately.
 Configuration, a local browser test and an offline DB query do not prove that the user's
 ChatGPT account rendered the App. Do not alter credentials, client settings or automations

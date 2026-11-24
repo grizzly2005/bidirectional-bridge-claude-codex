@@ -1,14 +1,16 @@
-# Bridge protocol — v1.4.0
+# Bridge protocol — v1.5.0
 
-The wire contract between Claude and Codex. Normative source: JSON Schemas exported from
+The wire contract between Claude Code, Codex and Gemini (Google Antigravity). Normative source: JSON Schemas exported from
 `@bridge/protocol` (`SCHEMAS`, plus `MemoryScopeSchema` and `MemoryNoteDraftSchema`).
 MCP tool argument shapes are also exported by the neutral server core. TypeScript types
 mirror these contracts; where they disagree, the schema wins.
 
-Protocol **1.4.0**, bridge package/runtime **0.4.0**, independently versioned web-audit
+Protocol **1.5.0**, bridge package/runtime **0.5.0**, independently versioned web-audit
 **0.1.0**, SQLite schema **6** and memory envelope schema **1** identify different layers.
 The existing `SCHEMAS` registry and required adapter fields retain their 1.3.0 shapes.
-1.4.0 adds working-memory tools/types, an event/error and an optional adapter byte limit.
+1.4.0 added working-memory tools/types, an event/error and an optional adapter byte limit.
+1.5.0 is additive: optional `TaskSpec.model` / `TaskSpec.effort`, the third runtime id
+`gemini`, model-preference tools and a per-runtime token summary in telemetry queries.
 Validation and attempt-authority repairs are stricter for formerly accepted invalid inputs;
 review the [v0.4.0 notes](releases/v0.4.0.md). SQLite migration is not a wire major-version bump.
 
@@ -238,8 +240,16 @@ artifact ids, so the delegate reads exactly what it was given, not a transcript.
 
 `TaskSpec.max_turns` optionally selects a finite runtime ceiling from 1 through 64. Omission
 keeps Claude's conservative default of 12. The field persists with the task, so strict
-same-task recovery uses the same ceiling. It does not permit model or effort overrides:
-bridge-created Claude workers always request `opus` with `high` effort.
+same-task recovery uses the same ceiling.
+
+`TaskSpec.model` and `TaskSpec.effort` (1.5.0) optionally select the target runtime's model
+slug and reasoning effort for that task. They are validated syntactically (a model slug is
+`^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$`, an effort `^[a-z][a-z0-9_-]{0,31}$`) so they can
+never be parsed as a CLI flag; whether the slug exists is decided by the runtime, and an
+unknown slug fails the attempt instead of falling back. Precedence at execution:
+task field, then the workspace preference stored by `bridge_set_model_preference`, then the
+runtime's own default (no flag passed). When a model was requested and the runtime reports a
+different one, the attempt fails with `RUNTIME_PROFILE_MISMATCH`.
 
 The orchestrator releases the lease after positive stop confirmation. Timeout, transport
 failure or a dead manager without that evidence retains quarantine beyond the lease TTL.
@@ -362,6 +372,18 @@ superseded and archived revisions; references carry canonical artifact ids/hashe
 See [shared-memory.md](shared-memory.md) for the payloads and bounded restart demonstration.
 Native managers call these tools. Delegated Codex workers receive selected context and
 propose deltas through artifacts because their project bridge MCP remains disabled.
+
+Models: `bridge_get_model_preferences`, `bridge_set_model_preference` (stored in
+`model-preferences.json` next to the database, shared by every native process of the
+workspace, re-read at each delegation). `bridge_query_telemetry` also returns `by_agent`,
+the sum of runtime-reported tokens per runtime over the returned records.
+
+Runtimes: `claude` (Claude Code `claude -p`), `codex` (Codex App Server) and `gemini`
+(Antigravity CLI `agy -p --output-format stream-json`, or legacy Gemini CLI). The Gemini
+worker launches only with `--gemini-auth api-key|enterprise`; without it, a delegation to
+`gemini` returns `PARTIAL` with a disabled-worker blocker and launches nothing. Delegated
+workers receive `BRIDGE_DELEGATED_WORKER=1`, and the native launcher refuses to start under
+that marker.
 
 Diagnostics and upgrade/rollback evidence boundaries are specified in
 [BRIDGE_RELEASE_ROLLBACK.md](BRIDGE_RELEASE_ROLLBACK.md).

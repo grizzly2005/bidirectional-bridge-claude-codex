@@ -121,6 +121,41 @@ remains ignored. The routing policy guides task fit but does not establish bench
 superiority or permit quota-based routing. No global skill installation is required for this
 checkout.
 
+### Gemini / Google Antigravity (0.5.0)
+
+Antigravity (App, IDE and `agy` CLI) reads workspace MCP servers from
+`<workspace>/.agents/mcp_config.json`, which takes absolute paths. Generate it after
+`npm run build`:
+
+```bash
+npm run install:antigravity -- --workspace /path/to/project
+# preview only: add --dry-run; replace an existing "bridge" entry: add --force
+```
+
+The file is machine-local and git-ignored; a previous version is kept as `.bak`. Reload MCP
+servers (`/mcp` in `agy`) and check that `bridge_server_info` reports `caller=gemini`.
+Antigravity discovers the `using-bridge` skill in `.agents/skills/`.
+
+The Gemini **worker** (Claude or Codex delegating to `gemini`) is disabled by default. Google's
+Antigravity FAQ states that wrapping `agy` inside third-party coding agents is not supported
+on consumer plans, and suspensions have been reported. Enable the worker only with a
+supported authorization, by adding the flag to the Claude/Codex MCP args:
+
+- `--gemini-auth api-key`: a Google AI Studio key in `GEMINI_API_KEY` (billed per use) and
+  `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`;
+- `--gemini-auth enterprise`: the CLI is signed in with Gemini Enterprise / Vertex AI.
+
+`--gemini-command <path>` selects the executable (default `agy`, or `$BRIDGE_GEMINI_COMMAND`;
+check that it is the CLI and not the desktop launcher with `agy --version`).
+`--gemini-dialect gemini-cli` selects the legacy Gemini CLI for enterprise installations.
+Risky tools stay soft-denied unless `--gemini-skip-permissions` is passed explicitly.
+
+### Local dashboard
+
+`npm run dashboard` serves a read-only tracking page on `127.0.0.1` for any client and opens it.
+It follows the latest run and shows delegated tokens per runtime. The URL fragment carries a
+temporary reader capability: do not share it. `Ctrl+C` stops the page; workers continue.
+
 Review the configuration before approving it. Claude Code and Codex may ask you to trust a
 project-scoped MCP server. Approve only this repository and do not copy or edit private trust
 state by hand.

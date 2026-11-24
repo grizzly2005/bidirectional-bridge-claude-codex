@@ -58,14 +58,16 @@ session. An owner uses `bridge_resume_task`; a manager uses
 worker remains owner and execution identity for the adapter, lease, deliverable, telemetry,
 and persisted session.
 
-## Claude worker profile and turn budget
+## Worker models and turn budget
 
-The bridge runtime, not the manager or `using-bridge` skill, owns Claude selection. Every
-fresh and resumed Claude worker is launched through the supported Claude Code interface with
-`--model opus --effort high`. Ordinary task and delegation payloads have no model or effort
-override. If Claude Code reports an actual non-Opus model, the attempt fails with
-`RUNTIME_PROFILE_MISMATCH`; if it reports no model, telemetry keeps the actual model `null`
-rather than inventing a version.
+Since 0.5.0 every worker uses its runtime's default model unless a manager selects one:
+`bridge_set_model_preference` stores a model/effort per runtime (`claude`, `codex`, `gemini`)
+for the workspace, and `spec.model` / `spec.effort` override it for one delegation. Precedence
+is task, then stored preference, then runtime default. When a model was requested and Claude
+Code reports a different one, the attempt fails with `RUNTIME_PROFILE_MISMATCH`; if it
+reports no model, telemetry keeps the actual model `null` rather than inventing a version.
+Embedders constructing `ClaudeCodeRunner` without `defaultProfile` keep the historical
+`opus` / `high` default.
 
 Claude turn ceilings are finite and task-specific:
 
