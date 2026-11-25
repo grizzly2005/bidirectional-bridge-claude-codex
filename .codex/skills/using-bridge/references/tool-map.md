@@ -7,6 +7,7 @@ Use the live MCP schema as the final authority. Load this map only when the exac
 | Tool | Use |
 |---|---|
 | `bridge_server_info` | Confirm bound caller and delegation policy once per fresh session. |
+| `bridge_resume_project` | Build a bounded project resume card (discovered scopes, active decisions, canonically verified results, open tasks, next action) when resuming a project in a new chat. |
 | `bridge_doctor` | Diagnose startup identity versus current disk and safe aggregate state; does not call models or prove provider availability. |
 | `bridge_create_task` | Create a depth-0 manager root with objective, scope, dependencies, deliverable, and verification criteria. |
 | `bridge_claim_task` | Atomically own the root. Claiming is not write permission. |

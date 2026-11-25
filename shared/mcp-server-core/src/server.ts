@@ -41,9 +41,11 @@ export const DEFAULT_SERVER_INSTRUCTIONS =
   "stranded after persisting a runtime handle, use bridge_resume_task. If your owned manager " +
   "task directly delegated the stranded child, use bridge_resume_delegated_task; the bridge " +
   "keeps the child owner as execution identity. Never create a replacement task for recovery. " +
+  "In a fresh chat, call bridge_resume_project to discover the current project's recorded work. " +
   "When resuming project work, request memory_get_context for its explicit namespace/context/branch/version/epoch " +
   "only if shared working memory is relevant. Persist its scope and change_cursor; use memory_get_changes for deltas. " +
   "Record meaningful decisions, pending actions and abandoned-track reasons with memory_upsert before handoff, " +
+  "setting contributed_by with related_task_ids or references after a delegation so worker authorship is verified. " +
   "using your current owned task, expected_revision and a stable idempotency key. Memory notes reference " +
   "canonical artifacts and never change campaign evidence or finding verdicts.";
 

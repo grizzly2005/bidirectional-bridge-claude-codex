@@ -57,6 +57,10 @@ export function antigravityServerEntry(args) {
     cwd: workspace,
     env: {},
     disabled: false,
+    // Delegated tasks can run for many minutes; Antigravity's default tool timeout is short.
+    timeoutSeconds: 2400,
+    // Load the identity and resume tools eagerly so a new session can orient itself.
+    tools: { bridge_server_info: { eager: true }, bridge_resume_project: { eager: true } },
   };
 }
 

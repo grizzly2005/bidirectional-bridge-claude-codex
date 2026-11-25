@@ -24,6 +24,23 @@ beforeEach(() => {
 afterEach(() => { cp.close(); rmSync(dir, { recursive: true, force: true }); });
 
 describe("shared working-memory contracts", () => {
+  it("verifies delegated authors against canonical task or artifact ownership", () => {
+    const manager = task("gemini");
+    const byTask = write("delegated-task", 0, draft({ kind: "decision", contributed_by: "claude",
+      related_task_ids: [claude.task_id] }), manager);
+    expect(byTask.contributed_by).toBe("claude");
+    const taskRead = cp.memory.getContext({ scope, keys: ["delegated-task"] }).notes[0]!;
+    expect(taskRead.recorded_by).toBe("gemini");
+    expect(taskRead.resolved_authors).toEqual(["claude"]);
+    const artifact = cp.artifacts.publish({ task_id: codex.task_id, produced_by: "codex", kind: "report",
+      name: "proof.txt", inline: "canonical proof" });
+    write("delegated-artifact", 0, draft({ contributed_by: "codex",
+      references: [{ artifact_id: artifact.artifact_id, sha256: artifact.sha256 }] }), manager);
+    expect(cp.memory.getContext({ scope, keys: ["delegated-artifact"] }).notes[0]?.resolved_authors).toEqual(["codex"]);
+    expect(() => write("forged", 0, draft({ contributed_by: "codex" }), manager))
+      .toThrow(expect.objectContaining({ code: ErrorCode.INVALID_ARGUMENT }));
+    expect(cp.store.getMemoryNote(scope, "forged")).toBeUndefined();
+  });
   it("binds provenance to the actual current task and keeps revisions from both agents", () => {
     const first = write("business-track");
     const second = write("business-track", 1, draft({ summary: "Claude identified the missing workflow prerequisite." }), claude);

@@ -29,6 +29,7 @@ import type { ControlPlane, Orchestrator } from "@bridge/control-plane";
 import { bridgeDiagnostics, type BridgeProcessIdentity } from "./diagnostics.js";
 import type { TrackingCoordinator } from "./tracking.js";
 import { MEMORY_TOOLS } from "./memory-tools.js";
+import { RESUME_TOOLS } from "./resume-tools.js";
 
 /* ------------------------------------------------------------------ *
  * Zod shapes (the MCP SDK builds JSON Schema from these)
@@ -158,11 +159,13 @@ const who = (args: Record<string, unknown>, ctx: ToolContext): AgentId => {
 
 export const TOOLS: readonly ToolDefinition[] = [
   ...MEMORY_TOOLS,
+  ...RESUME_TOOLS,
   {
     name: "bridge_doctor", title: "Export private-content-free bridge diagnostics",
     description: "Compare the server startup identity with current source and distribution hashes; export aggregate admission, lease and observation status without prompts or runtime handles.",
     inputShape: {},
     handler: (_args, ctx) => bridgeDiagnostics(ctx.cp, { caller: ctx.defaultAgent,
+      databaseSchemaVersion: ctx.cp.store.schemaVersion(),
       delegationPolicy: ctx.delegationPolicy, ...(ctx.startupIdentity ? { identity: ctx.startupIdentity } : {}) }),
   },
   {

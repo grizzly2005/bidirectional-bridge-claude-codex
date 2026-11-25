@@ -150,6 +150,26 @@ check that it is the CLI and not the desktop launcher with `agy --version`).
 `--gemini-dialect gemini-cli` selects the legacy Gemini CLI for enterprise installations.
 Risky tools stay soft-denied unless `--gemini-skip-permissions` is passed explicitly.
 
+### Unified CLI: `bridge setup`, `bridge doctor`, `bridge update`
+
+After `npm link` (or via `npm run bridge --`), one `bridge` command manages project wiring,
+per-client diagnostics, and release updates:
+
+```bash
+bridge setup                        # find or install the central bridge and wire chosen clients
+bridge setup --clients claude,codex,gemini --sync-skills
+bridge doctor                       # check workspace, SQLite DB, caller identity, WSL and sessions
+bridge update                       # inspect latest GitHub release, affected projects and migrations
+bridge update --auto-compatible     # verify SHA-256 + stdio startup smoke, then apply if compatible
+```
+
+Re-running `bridge setup` on an aligned project leaves its configuration files untouched and
+preserves existing `--workspace` (including WSL UNC paths), `--db`, and `--codex-wsl-executable`
+flags. `bridge doctor` reports concrete per-client status and exact remediation commands without
+opening or migrating original databases. `bridge update` verifies `SHA256SUMS.txt` and
+`RELEASE.json`, tests staged MCP startup before activation, and flags connected projects that have
+in-flight work, older running sessions, or SQLite schemas requiring migration.
+
 ### Local dashboard
 
 `npm run dashboard` serves a read-only tracking page on `127.0.0.1` for any client and opens it.

@@ -192,7 +192,11 @@ function readDatabase(originalPath, supportedVersion) {
       if (current !== captured) return emptyDatabase("changing_store");
     }
     const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-    db = new DatabaseSync(copy, { readOnly: true });
+    // Open the *disposable copy* read-write at the file level so SQLite may create its
+    // `observer.db-shm` index inside `scratch` and replay an uncheckpointed WAL. A
+    // `readOnly` open without an existing -shm can fail on such WAL snapshots. SQL is
+    // still query-only, and the original database is never opened by SQLite at all.
+    db = new DatabaseSync(copy);
     db.exec("PRAGMA query_only = ON");
     db.exec("BEGIN");
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
@@ -229,6 +233,19 @@ function readDatabase(originalPath, supportedVersion) {
       try { rmSync(scratch, { recursive: true, force: true }); } catch {}
     }
   }
+}
+
+/**
+ * Aggregate, redacted inspection of one database through a stable disposable copy. Shared
+ * with the per-client `scripts/cli/doctor.mjs`; never opens or migrates the original.
+ */
+export function inspectDatabaseCopy(databasePath, supportedVersion = null) {
+  return readDatabase(resolve(databasePath), supportedVersion);
+}
+
+/** Schema version declared by an installation's control-plane source, or null. */
+export function supportedSchemaVersion(repositoryRoot) {
+  return sourceSchemaVersion(resolve(repositoryRoot));
 }
 
 export function offlineBridgeDiagnostics(options = {}) {

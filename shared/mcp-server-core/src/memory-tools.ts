@@ -17,6 +17,7 @@ const reference = z.object({
 }).strict();
 const note = z.object({
   kind: z.enum(["context", "decision", "observation", "next-action", "abandoned-track"]),
+  contributed_by: z.enum(["claude", "codex", "gemini"]).nullable().optional(),
   title: z.string().min(1).max(200), summary: z.string().min(1).max(2000),
   lifecycle: lifecycle.default("active"), references: z.array(reference).max(16).default([]),
   related_task_ids: z.array(z.string().min(1).max(64)).max(8).default([]),

@@ -261,13 +261,31 @@ The experimental database uses schema 6. Keep it separate from a schema-4/5 rele
 older binaries cannot reopen a database upgraded to version 6. Existing verification history
 is retained, but old rows without a known attempt do not certify a new attempt.
 
-## Shared working memory
+## Shared working memory and project resumption
 
-When starting or resuming work that needs continuity, call `memory_get_context` for the
+On “reprends ce projet”, “resume this project”, or when opening a fresh native chat without
+conversation history on an existing project, call `bridge_resume_project` (`{}`) first. Present a
+concise four-part resume card:
+
+1. **Décisions en vigueur** (`decisions`): active `decision` and `context` notes across the
+   project's discovered scopes, never resurrecting `superseded` or `archived` revisions.
+2. **Résultats vérifiés et preuves** (`verified_results`): only results backed by passing canonical
+   `VerificationResult` checks or `intact` SHA-256 artifact references, with their author and proof
+   IDs; keep `unverified_observations` clearly separate so unverified claims never appear proven.
+3. **Tâches ouvertes** (`open_tasks`): nonterminal tasks (`PENDING`, `CLAIMED`, `WORKING`,
+   `VERIFYING`, `BLOCKED`) and any quarantined leases.
+4. **Prochaine action** (`next_actions`): active `next-action` notes, `abandoned_tracks` (with
+   `reopen_when`), and `recommended_next_action`.
+
+When targeting one known scope directly, call `memory_get_context` for the
 explicit project/program, namespace, branch, application version and evidence epoch.
 The native manager performs these MCP calls. Delegated workers (Codex, Claude, Gemini) do not
 use the project bridge MCP; load a useful context as manager, publish a compact input artifact, and persist
 the returned working deltas under the manager's own task with references to the worker output.
+At the end of every meaningful delegation, call `memory_upsert` to record what changed, set
+`contributed_by` to the worker runtime (`claude`, `codex` or `gemini`), and include the child
+task in `related_task_ids` and/or its produced artifacts in `references` so the server can
+canonically verify and attribute the contribution to its author.
 Request only the useful notes with a bounded byte budget. Keep the database/scope and
 `change_cursor` together; use `memory_get_changes` at handoff or resumption for deltas.
 Do not inject all memory into every prompt or load an old program's context implicitly.

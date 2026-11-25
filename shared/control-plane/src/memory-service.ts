@@ -61,7 +61,7 @@ export interface MemoryReferenceState {
   readonly artifact_id: string;
   readonly status: "intact" | "missing" | "hash-mismatch" | "content-changed" | "context-mismatch";
 }
-export type MemoryReadNote = MemoryNote & { readonly reference_states: readonly MemoryReferenceState[] };
+export type MemoryReadNote = MemoryNote & { readonly reference_states: readonly MemoryReferenceState[]; readonly recorded_by: AgentId; readonly resolved_authors: readonly AgentId[] };
 
 /** Working notes reference canonical evidence; this service never changes a campaign. */
 export class MemoryService {
@@ -75,7 +75,7 @@ export class MemoryService {
     if (new Set(input.note.related_task_ids).size !== input.note.related_task_ids.length) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Duplicate related task IDs");
     if (input.note.kind === "abandoned-track" && input.note.abandonment === null) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "An abandoned track needs its reason, tested conditions and reopening trigger");
     if (typeof input.idempotency_key !== "string" || !input.idempotency_key.trim() || input.idempotency_key.length > 200) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "A bounded idempotency_key is required");
-    const draft = structuredClone(input.note);
+    const draft = { ...structuredClone(input.note), contributed_by: input.note.contributed_by ?? null };
     if (bytes(draft) > MEMORY_MAX_NOTE_BYTES) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Memory note is too large; publish detailed content as an artifact");
     const request = { scope, key: input.key, expected_revision: expected, note: draft, task_id: input.task_id, agent: input.agent };
     return this.store.transaction(() => {
@@ -94,6 +94,12 @@ export class MemoryService {
           if (artifact.sha256 !== ref.sha256 || !this.artifacts.verifyIntegrity(ref.artifact_id).intact) throw new BridgeError(ErrorCode.INVALID_ARGUMENT, "Memory artifact reference hash or retained content differs", { artifact_id: ref.artifact_id });
         }
         for (const id of draft.related_task_ids) if (!this.store.getTask(id)) throw new BridgeError(ErrorCode.NOT_FOUND, "Related memory task does not exist", { task_id: id });
+        if (draft.contributed_by !== null && draft.contributed_by !== input.agent) {
+          const taskProof = draft.related_task_ids.some(id => this.store.getTask(id)?.owner === draft.contributed_by || this.store.getDeliverable(id)?.agent === draft.contributed_by);
+          const artifactProof = draft.references.some(ref => this.store.getArtifact(ref.artifact_id)?.produced_by === draft.contributed_by);
+          if (!taskProof && !artifactProof) throw new BridgeError(ErrorCode.INVALID_ARGUMENT,
+            "contributed_by must be corroborated by a referenced task owner or artifact producer", { contributed_by: draft.contributed_by });
+        }
         const at = this.clock.now();
         const event = this.store.appendEvent({ type: EventType.MEMORY_UPDATED, task_id: task.task_id, agent: input.agent,
           payload: { scope, key: input.key, revision: expected + 1, lifecycle: draft.lifecycle }, idempotency_key: input.idempotency_key }, at);
@@ -107,7 +113,7 @@ export class MemoryService {
     });
   }
 
-  private readNote(note: MemoryNote): MemoryReadNote {
+  readNote(note: MemoryNote): MemoryReadNote {
     const reference_states: MemoryReferenceState[] = note.references.map(ref => {
       const artifact = this.store.getArtifact(ref.artifact_id);
       let status: MemoryReferenceState["status"] = "intact";
@@ -117,7 +123,24 @@ export class MemoryService {
       else if (note.scope.epoch !== null && ref.source_epoch !== undefined && ref.source_epoch !== note.scope.epoch) status = "context-mismatch";
       return { artifact_id: ref.artifact_id, status };
     });
-    return { ...note, reference_states };
+    const childTaskAuthors = note.related_task_ids.flatMap(id => {
+      const related = this.store.getTask(id);
+      if (!related || related.parent_task_id !== note.provenance.task_id) return [];
+      const author = this.store.getDeliverable(id)?.agent ?? related.owner;
+      return author ? [author] : [];
+    });
+    const artifactAuthors = note.references.flatMap((ref, index) => {
+      const artifact = this.store.getArtifact(ref.artifact_id);
+      return artifact && reference_states[index]?.status === "intact" ? [artifact.produced_by] : [];
+    });
+    const contributed_by = note.contributed_by ?? null;
+    const corroborated = contributed_by !== null && (note.related_task_ids.some(id =>
+      this.store.getTask(id)?.owner === contributed_by || this.store.getDeliverable(id)?.agent === contributed_by)
+      || artifactAuthors.includes(contributed_by));
+    const resolved_authors = corroborated
+      ? [...new Set([contributed_by, ...childTaskAuthors, ...artifactAuthors])]
+      : [...new Set([note.provenance.agent, ...childTaskAuthors, ...artifactAuthors])];
+    return { ...note, contributed_by, reference_states, recorded_by: note.provenance.agent, resolved_authors };
   }
 
   private cursor(requested: number | undefined, head: number, name: string): number {

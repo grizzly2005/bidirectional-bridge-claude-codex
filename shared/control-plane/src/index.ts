@@ -23,6 +23,8 @@ export type { AcquireLeaseInput, LeaseConflict } from "./lease-manager.js";
 
 export { ArtifactRegistry } from "./artifact-registry.js";
 export { MemoryService } from "./memory-service.js";
+export { ResumeService } from "./resume-service.js";
+export type { ProjectResumeInput } from "./resume-service.js";
 export type { MemoryUpsertInput, MemoryContextInput, MemoryChangesInput, MemoryReadNote, MemoryReferenceState } from "./memory-service.js";
 export type { ArtifactRegistryOptions, PublishArtifactInput } from "./artifact-registry.js";
 

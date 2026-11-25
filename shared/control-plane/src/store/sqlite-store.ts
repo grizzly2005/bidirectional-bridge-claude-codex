@@ -14,7 +14,7 @@
 
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { DatabaseSync as DatabaseSyncCtor } from "node:sqlite";
 import {
   BridgeError,
@@ -30,6 +30,7 @@ import {
   type LeaseId,
   type MemoryNote,
   type MemoryScope,
+  type MemoryScopeSummary,
   type StatusUpdate,
   type Task,
   type TaskAttempt,
@@ -274,11 +275,13 @@ type Row = Record<string, unknown>;
 
 export class SqliteStateStore implements StateStore {
   private readonly db!: DatabaseSync;
+  private readonly resolvedPath: string;
   private depth = 0;
   readonly journalMode!: string;
 
   constructor(options: SqliteStoreOptions) {
     const { path, journalMode = "auto" } = options;
+    this.resolvedPath = path === ":memory:" ? path : resolve(path);
     if (path !== ":memory:") {
       mkdirSync(dirname(path), { recursive: true });
     }
@@ -902,6 +905,29 @@ export class SqliteStateStore implements StateStore {
   }
 
   /* ---------------- shared memory ---------------- */
+
+  schemaVersion(): number { return SCHEMA_VERSION; }
+
+  databasePath(): string { return this.resolvedPath; }
+
+  listMemoryScopes(): MemoryScopeSummary[] {
+    const rows = this.db.prepare(`SELECT m.scope_key, m.namespace, m.context_id, m.branch,
+      m.application_version, m.epoch, COUNT(*) AS total_revisions,
+      MAX(m.change_cursor) AS latest_change_cursor,
+      SUM(CASE WHEN m.lifecycle = 'active' AND NOT EXISTS (
+        SELECT 1 FROM memory_notes newer WHERE newer.scope_key = m.scope_key
+          AND newer.note_key = m.note_key AND newer.revision > m.revision
+      ) THEN 1 ELSE 0 END) AS active_note_count
+      FROM memory_notes m GROUP BY m.scope_key
+      ORDER BY latest_change_cursor DESC, m.context_id ASC`).all() as Row[];
+    return rows.map(row => ({
+      scope: { namespace: row["namespace"] as MemoryScope["namespace"], context_id: row["context_id"] as string,
+        branch: row["branch"] as string | null, application_version: row["application_version"] as string | null,
+        epoch: row["epoch"] as string | null },
+      active_note_count: Number(row["active_note_count"]), total_revisions: Number(row["total_revisions"]),
+      latest_change_cursor: Number(row["latest_change_cursor"]),
+    }));
+  }
 
   getMemoryNote(scope: MemoryScope, key: string, before_cursor?: number): MemoryNote | undefined {
     if (before_cursor !== undefined) cursorArgument("before_cursor", before_cursor);

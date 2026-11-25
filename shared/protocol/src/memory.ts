@@ -19,6 +19,8 @@ export interface MemoryArtifactReference {
   readonly source_epoch?: string;
 }
 export interface MemoryNoteDraft {
+  /** Canonical worker attribution, verified against referenced bridge state at write time. */
+  readonly contributed_by?: AgentId | null;
   readonly kind: MemoryKind;
   readonly title: string;
   readonly summary: string;
@@ -46,6 +48,38 @@ export interface MemoryNote extends MemoryNoteDraft {
     readonly attempt: number;
   };
 }
+export interface MemoryScopeSummary {
+  readonly scope: MemoryScope;
+  readonly active_note_count: number;
+  readonly total_revisions: number;
+  readonly latest_change_cursor: number;
+}
+
+export interface ProjectResumeCard {
+  readonly project: {
+    readonly project_name: string;
+    readonly workspace_root: string;
+    readonly database_path: string;
+    readonly workspace_id: string;
+    readonly schema_version: number;
+    readonly head_cursor: number;
+    readonly scopes: readonly MemoryScopeSummary[];
+    readonly quarantined_leases_count: number;
+  };
+  readonly decisions: ReadonlyArray<{ scope: MemoryScope; key: string; revision: number; kind: MemoryKind; title: string; summary: string; recorded_by: AgentId; contributed_by: AgentId | null; resolved_authors: readonly AgentId[]; reference_states: readonly { artifact_id: ArtifactId; status: string }[]; at: number }>;
+  readonly verified_results: ReadonlyArray<
+    { source: "task"; task_id: TaskId; state: string; author: AgentId | null; summary: string; changed_scope: readonly string[]; checks: readonly { kind: string; command: string; exit_code: number | null; summary: string }[]; intact_artifacts: readonly { artifact_id: ArtifactId; name: string; sha256: string; produced_by: AgentId }[] } |
+    { source: "note"; scope: MemoryScope; key: string; revision: number; title: string; summary: string; recorded_by: AgentId; contributed_by: AgentId | null; resolved_authors: readonly AgentId[]; references: readonly MemoryArtifactReference[]; related_task_ids: readonly TaskId[] }
+  >;
+  readonly unverified_observations: ReadonlyArray<{ scope: MemoryScope; key: string; revision: number; title: string; summary: string; recorded_by: AgentId; contributed_by: AgentId | null; resolved_authors: readonly AgentId[]; unverified_reason: string }>;
+  readonly open_tasks: ReadonlyArray<{ task_id: TaskId; state: string; owner: AgentId | null; delegation_depth: number; objective: string; blockers: readonly { code: string; message: string }[]; updated_at: number }>;
+  readonly next_actions: {
+    readonly items: ReadonlyArray<{ scope: MemoryScope; key: string; revision: number; title: string; summary: string; recorded_by: AgentId; resolved_authors: readonly AgentId[]; related_task_ids: readonly TaskId[] }>;
+    readonly abandoned_tracks: ReadonlyArray<{ title: string; summary: string; abandonment: MemoryNoteDraft["abandonment"] }>;
+    readonly recommended_next_action: string;
+  };
+  readonly omitted: { scopes: number; decisions: number; verified_results: number; unverified_observations: number; open_tasks: number; next_actions: number };
+}
 /** Fixed-field serialization supplies a portable stable composite identity. */
 export function memoryScopeKey(scope: MemoryScope): string {
   return JSON.stringify([scope.namespace, scope.context_id, scope.branch, scope.application_version, scope.epoch]);
@@ -67,6 +101,7 @@ export const MemoryNoteDraftSchema = {
   type: "object", additionalProperties: false,
   properties: {
     kind: { enum: ["context", "decision", "observation", "next-action", "abandoned-track"] },
+    contributed_by: { anyOf: [{ enum: ["claude", "codex", "gemini"] }, { type: "null" }] },
     title: text(200), summary: text(2000), lifecycle: { enum: ["active", "superseded", "archived"] },
     references: {
       type: "array", maxItems: 16, items: {

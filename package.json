@@ -14,6 +14,7 @@
   "homepage": "https://github.com/grizzly2005/bidirectional-bridge-claude-codex#readme",
   "type": "module",
   "bin": {
+    "bridge": "./scripts/bridge-cli.mjs",
     "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
     "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs",
     "bridge-dashboard": "./scripts/bridge-dashboard.mjs"
@@ -42,7 +43,8 @@
     "links:fix": "node scripts/repair-workspace-links.mjs --fix",
     "live:claude": "node claude/claude-side/scripts/live-claude-delegation.mjs",
     "dashboard": "node scripts/bridge-dashboard.mjs --open",
-    "install:antigravity": "node scripts/install-antigravity.mjs"
+    "install:antigravity": "node scripts/install-antigravity.mjs",
+    "bridge": "node scripts/bridge-cli.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

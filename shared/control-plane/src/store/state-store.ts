@@ -28,6 +28,7 @@ import type {
   MemoryLifecycle,
   MemoryNote,
   MemoryScope,
+  MemoryScopeSummary,
   StatusUpdate,
   Task,
   TaskAttempt,
@@ -147,6 +148,9 @@ export interface AttemptObservation extends ObservationStatus {
 export interface StateStore {
   /** Runs `fn` inside an immediate write transaction. Rolls back on throw. */
   transaction<T>(fn: () => T): T;
+  schemaVersion(): number;
+  databasePath(): string;
+  listMemoryScopes(): MemoryScopeSummary[];
 
   // ---- tasks ----
   insertTask(task: Task): void;

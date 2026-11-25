@@ -14,6 +14,7 @@ export { serve, stderrLog } from "./lifecycle.js";
 export type { LogSink, ServeHandle, ServeOptions } from "./lifecycle.js";
 
 export { TOOLS, runTool } from "./tools.js";
+export { RESUME_TOOLS } from "./resume-tools.js";
 export type { DelegationPolicy, ToolContext, ToolDefinition } from "./tools.js";
 export { captureBridgeIdentity, bridgeDiagnostics } from "./diagnostics.js";
 export type { BridgeProcessIdentity } from "./diagnostics.js";

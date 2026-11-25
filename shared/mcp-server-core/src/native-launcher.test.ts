@@ -223,6 +223,7 @@ describe("native project MCP launcher", () => {
     };
     expect(rootPackage.private).toBe(true);
     expect(rootPackage.bin).toEqual({
+      "bridge": "./scripts/bridge-cli.mjs",
       "claude-codex-bridge": "./scripts/native-bridge-mcp.mjs",
       "bridge-tracking-mcp": "./scripts/bridge-tracking-mcp.mjs",
       "bridge-dashboard": "./scripts/bridge-dashboard.mjs",
