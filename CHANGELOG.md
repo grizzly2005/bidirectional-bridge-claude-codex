@@ -13,6 +13,38 @@ explicitly.
 
 No changes recorded yet.
 
+## 0.6.0 — 2026-11-25
+
+Package/runtime 0.6.0, wire 1.6.0 (additive), SQLite schema 6 unchanged. See
+[the release notes](docs/releases/v0.6.0.md).
+
+### Added
+
+- **Project resume card**: read-only `bridge_resume_project` builds a bounded
+  `ProjectResumeCard` (active decisions, verified results separated fail-closed from
+  unverified observations, open tasks, next actions and abandoned tracks) across the memory
+  scopes of the selected database. The `using-bridge` skill calls it on “reprends ce
+  projet”; Antigravity installs load it eagerly.
+- **Canonical worker attribution**: optional `contributed_by` on memory notes, accepted only
+  when related tasks or referenced artifacts attribute the work to that runtime; reads
+  return `recorded_by` and `resolved_authors`.
+- **Unified `bridge` CLI** (`scripts/bridge-cli.mjs`, `npm run bridge --`):
+  - `bridge setup` finds or bootstraps the central installation and wires Claude Code, Codex
+    and Antigravity idempotently, preserving `--workspace` (WSL UNC included), `--db`,
+    `--codex-wsl-executable` and `--gemini-*` flags; aligned projects stay byte-identical.
+  - `bridge doctor` reports per-client verdicts in French with exact remediation commands,
+    without opening or migrating original databases (copies only).
+  - `bridge update` checks GitHub Releases (check-only by default), verifies
+    `SHA256SUMS.txt` and `RELEASE.json`, runs a real staged MCP stdio smoke before activation
+    and inventories connected projects, stale sessions, active work and schema migrations.
+
+### Changed
+
+- `install-antigravity` writes `timeoutSeconds: 2400` and eager `bridge_server_info` /
+  `bridge_resume_project` entries.
+- The lockfile records every `@openai/codex` optional platform package again (Windows,
+  macOS and Linux), so `npm ci` installs the native Codex binary on each OS.
+
 ## 0.5.0 — 2026-11-24 (candidate)
 
 Package/runtime 0.5.0, wire 1.5.0 (additive), SQLite schema 6 unchanged. See

@@ -1,16 +1,18 @@
-# Bridge protocol — v1.5.0
+# Bridge protocol — v1.6.0
 
 The wire contract between Claude Code, Codex and Gemini (Google Antigravity). Normative source: JSON Schemas exported from
 `@bridge/protocol` (`SCHEMAS`, plus `MemoryScopeSchema` and `MemoryNoteDraftSchema`).
 MCP tool argument shapes are also exported by the neutral server core. TypeScript types
 mirror these contracts; where they disagree, the schema wins.
 
-Protocol **1.5.0**, bridge package/runtime **0.5.0**, independently versioned web-audit
+Protocol **1.6.0**, bridge package/runtime **0.6.0**, independently versioned web-audit
 **0.1.0**, SQLite schema **6** and memory envelope schema **1** identify different layers.
 The existing `SCHEMAS` registry and required adapter fields retain their 1.3.0 shapes.
 1.4.0 added working-memory tools/types, an event/error and an optional adapter byte limit.
 1.5.0 is additive: optional `TaskSpec.model` / `TaskSpec.effort`, the third runtime id
 `gemini`, model-preference tools and a per-runtime token summary in telemetry queries.
+1.6.0 is additive: the read-only `bridge_resume_project` tool (`ProjectResumeCard`) and an
+optional `contributed_by` worker attribution on memory notes.
 Validation and attempt-authority repairs are stricter for formerly accepted invalid inputs;
 review the [v0.4.0 notes](releases/v0.4.0.md). SQLite migration is not a wire major-version bump.
 
@@ -372,6 +374,17 @@ superseded and archived revisions; references carry canonical artifact ids/hashe
 See [shared-memory.md](shared-memory.md) for the payloads and bounded restart demonstration.
 Native managers call these tools. Delegated Codex workers receive selected context and
 propose deltas through artifacts because their project bridge MCP remains disabled.
+A note may set `contributed_by` (`claude`, `codex` or `gemini`) when it records a worker's
+contribution; the write is accepted only when a related task or referenced artifact in the
+same database canonically attributes it to that runtime. Reads return `recorded_by` and the
+`resolved_authors` derived from that bridge state.
+
+Project resumption: `bridge_resume_project` returns a bounded, read-only `ProjectResumeCard`
+for a fresh chat: active decisions/context notes, verified results (passing canonical
+verification or intact SHA-256 references) kept apart from unverified observations, open
+tasks with quarantined lease count, and next actions with abandoned tracks. Optional
+`namespace`, `context_id`, `branch`, `max_bytes` (2048–65536) and `max_items_per_section`
+(1–25) narrow it. It never returns artifact bodies, prompts or runtime handles.
 
 Models: `bridge_get_model_preferences`, `bridge_set_model_preference` (stored in
 `model-preferences.json` next to the database, shared by every native process of the

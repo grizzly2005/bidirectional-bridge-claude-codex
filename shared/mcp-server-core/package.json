@@ -1,6 +1,6 @@
 {
   "name": "@bridge/mcp-server-core",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -14,9 +14,9 @@
     }
   },
   "dependencies": {
-    "@bridge/control-plane": "0.5.0",
-    "@bridge/protocol": "0.5.0",
-    "@bridge/runner-adapter": "0.5.0",
+    "@bridge/control-plane": "0.6.0",
+    "@bridge/protocol": "0.6.0",
+    "@bridge/runner-adapter": "0.6.0",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^4.6.7"

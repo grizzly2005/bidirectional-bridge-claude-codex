@@ -14,10 +14,16 @@ native project-scoped MCP server.
 The bridge is a coordination layer. It does not choose the better model, split work
 automatically, or merge code for you.
 
-The latest published checkpoint is [v0.4.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.4.0);
-the current `main` is the **v0.5.0** candidate. Earlier checkpoints:
+The current checkpoint is [v0.6.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.6.0).
+Earlier checkpoints: [v0.5.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.5.0),
 [v0.3.1 notes](docs/releases/v0.3.1.md) (durable execution, schema-v4 migration, opt-in
 delegation tracking).
+
+**v0.6.0** ([notes](docs/releases/v0.6.0.md)) adds `bridge_resume_project`, a bounded
+project resume card for a fresh chat (“reprends ce projet”), canonical `contributed_by`
+worker attribution on memory notes, and a unified `bridge` CLI: `bridge setup`,
+`bridge doctor` and `bridge update` (verified GitHub release updates). Wire 1.6.0 is
+additive; SQLite schema 6 is unchanged.
 
 **v0.5.0** ([notes](docs/releases/v0.5.0.md)) adds Gemini/Antigravity as a third runtime
 (six delegation directions, sparse by default), manager-selectable models per runtime

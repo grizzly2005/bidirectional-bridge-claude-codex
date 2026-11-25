@@ -1,6 +1,6 @@
 {
   "name": "@bridge/gemini-side",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,7 @@
     }
   },
   "dependencies": {
-    "@bridge/protocol": "0.5.0",
-    "@bridge/runner-adapter": "0.5.0"
+    "@bridge/protocol": "0.6.0",
+    "@bridge/runner-adapter": "0.6.0"
   }
 }

@@ -17,7 +17,7 @@ export * from "./artifact-transport.js";
 export * from "./memory.js";
 
 /** Wire capability version; minor additions preserve existing exported schema shapes. */
-export const PROTOCOL_VERSION = "1.5.0";
+export const PROTOCOL_VERSION = "1.6.0";
 
 /** Release identity; separate from the wire protocol and persisted schema versions. */
-export const BRIDGE_VERSION = "0.5.0";
+export const BRIDGE_VERSION = "0.6.0";

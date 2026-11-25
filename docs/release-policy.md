@@ -31,7 +31,7 @@ project does not promise that a database created by one revision will be readabl
 
 ## Versioning
 
-- The package/checkpoint candidate version is `0.4.0` and the workspace root is marked `private`; nothing here is
+- The package/checkpoint version is `0.6.0` and the workspace root is marked `private`; nothing here is
   published to a package registry.
 - While the major version is `0`, a minor bump may carry breaking changes. Treat every version
   change as potentially breaking and read the changelog.
@@ -61,6 +61,7 @@ The release/0.4.0 branch is a versioned candidate. Local certification hashes it
 material; it does not certify production readiness or change the published v0.3.1 assets.
 The [v0.4.0 notes](releases/v0.4.0.md) document package/runtime0.4.0, wire1.4.0 and SQLite6.
 The [v0.5.0 notes](releases/v0.5.0.md) document package/runtime0.5.0, wire1.5.0 and SQLite6.
+The [v0.6.0 notes](releases/v0.6.0.md) document package/runtime0.6.0, wire1.6.0 and SQLite6.
 The web-audit module currently retains its independent 0.1.0 version; packaging verifies
 each workspace against its own lockfile entry and checks internal dependency versions.
 Source and compiled archives include all eight workspaces (0.5.0), memory tutorials and client skill

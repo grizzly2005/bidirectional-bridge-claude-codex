@@ -1,7 +1,7 @@
 {
   "name": "bidirectional-bridge",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Experimental MCP coordination bridge for bounded delegation between Claude Code, OpenAI Codex and Google Antigravity/Gemini",
   "license": "MIT",
   "repository": {
