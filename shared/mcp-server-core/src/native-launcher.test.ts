@@ -208,6 +208,14 @@ describe("native project MCP launcher", () => {
       .toThrow("--caller must be codex, claude or gemini");
   });
 
+  it("requires an explicit Linux executable selection for Windows WSL workers", async () => {
+    const module = await import("../../../scripts/native-bridge-mcp.mjs");
+    expect(module.parseNativeBridgeArgs(["--caller", "claude", "--delegation", "allow",
+      "--codex-wsl-executable", "/home/kali/bin/codex"])).toMatchObject({ codexWslExecutable: "/home/kali/bin/codex" });
+    expect(() => module.parseNativeBridgeArgs(["--caller", "claude", "--delegation", "allow", "--codex-wsl-executable"])).toThrow("requires a value");
+    expect(module.NATIVE_BRIDGE_HELP).toContain("--codex-wsl-executable");
+  });
+
   it("exposes a portable linked command with a Unix shebang", () => {
     const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
       readonly private?: boolean;
