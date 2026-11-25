@@ -9,6 +9,9 @@ persisted schema, the telemetry shape, or the documented workflows. See
 Grouped as Added / Changed / Fixed / Documentation / Security. Breaking changes are called out
 explicitly.
 
+Checkpoint status: **0.6.0 stable**, 0.5.0 experimental, 0.4.0 stable, 0.3.x experimental.
+A stable checkpoint is the recommended pre-1.0 installation, not a compatibility promise.
+
 ## Unreleased
 
 No changes recorded yet.

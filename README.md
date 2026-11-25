@@ -15,6 +15,8 @@ The bridge is a coordination layer. It does not choose the better model, split w
 automatically, or merge code for you.
 
 The current checkpoint is [v0.6.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.6.0).
+Release status: **v0.6.0 stable** · v0.5.0 experimental · v0.4.0 stable · v0.3.x experimental
+(stable checkpoints within the pre-1.0 line; experimental ones are GitHub pre-releases).
 Earlier checkpoints: [v0.5.0](https://github.com/grizzly2005/bidirectional-bridge-claude-codex/releases/tag/v0.5.0),
 [v0.3.1 notes](docs/releases/v0.3.1.md) (durable execution, schema-v4 migration, opt-in
 delegation tracking).
